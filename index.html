@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>长鑫杂货店</title>
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="favicon.png">
+<link rel="shortcut icon" href="favicon.svg">
+<link rel="apple-touch-icon" href="favicon.png">
 <link rel="stylesheet" href="css/style.css">
 <script src="js/vendor/marked.min.js"></script>
 <script src="js/vendor/marked-footnote.min.js"></script>
@@ -22,14 +26,10 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <h1 class="logo">
-        <span class="logo-icon">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
-            <path d="M2 17l10 5 10-5"/>
-            <path d="M2 12l10 5 10-5"/>
-          </svg>
+        <span class="logo-icon" title="长鑫杂货店">
+          <img src="assets/grocery-icon.jpg" alt="长鑫杂货店" style="width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);">
         </span>
-        <span class="logo-text">杂货店</span>
+        <span class="logo-text">长鑫杂货店</span>
         <span class="logo-badge">PRO MAX</span>
       </h1>
     </div>
@@ -110,14 +110,11 @@
     <div class="messages-container" id="messagesContainer">
       <div class="welcome-screen" id="welcomeScreen">
         <div class="welcome-hero-glow"></div>
-        <div class="welcome-icon">
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
-            <path d="M12 6v6l4 2"/>
-          </svg>
+        <div class="welcome-store-badge">
+          <img src="assets/grocery-hero.jpg" alt="长鑫杂货店" class="welcome-hero-banner">
         </div>
         <h2 id="welcomeTitle">开始对话</h2>
-        <p id="welcomeSub">选择一个模型，然后输入你的问题开始与 AI 交流</p>
+        <p id="welcomeSub">长鑫杂货店 · 选择一个模型，输入你的问题开始交流</p>
         <div class="welcome-suggestions">
           <button class="suggestion-chip" data-prompt="用中文通俗易懂地解释量子计算的基本原理、量子叠加态与量子纠缠">
             <div class="suggestion-chip-icon">💡</div>
