@@ -2649,6 +2649,41 @@ select:focus-visible {
   flex-shrink: 0;
 }
 
+.settings-modal-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.settings-modal-footer-left,
+.settings-modal-footer-right {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 520px) {
+  .settings-tab {
+    padding: 8px 6px;
+    font-size: 12px;
+  }
+  .settings-modal-footer {
+    flex-direction: column-reverse;
+    align-items: stretch;
+  }
+  .settings-modal-footer-left,
+  .settings-modal-footer-right {
+    justify-content: space-between;
+  }
+  .settings-modal-footer-left .btn-secondary,
+  .settings-modal-footer-right .btn-secondary,
+  .settings-modal-footer-right .btn-primary {
+    flex: 1;
+    text-align: center;
+  }
+}
+
 .btn-primary {
   padding: 9px 22px;
   background: var(--accent-gradient);

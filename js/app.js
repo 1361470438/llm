@@ -108,6 +108,16 @@ const dom = {
   btnDeleteConvoGroup: $('#btnDeleteConvoGroup'),
   settingFontSize: $('#settingFontSize'),
   settingShowThinking: $('#settingShowThinking'),
+  btnExportSettingsJson: $('#btnExportSettingsJson'),
+  btnCopySettingsJson: $('#btnCopySettingsJson'),
+  settingExportIncludeKey: $('#settingExportIncludeKey'),
+  importSettingsMode: $('#importSettingsMode'),
+  btnSelectSettingsFile: $('#btnSelectSettingsFile'),
+  importSettingsFileInput: $('#importSettingsFileInput'),
+  importSettingsText: $('#importSettingsText'),
+  btnApplyImportSettingsText: $('#btnApplyImportSettingsText'),
+  btnQuickExportSettings: $('#btnQuickExportSettings'),
+  btnQuickImportSettings: $('#btnQuickImportSettings'),
   imageOverlay: $('#imageOverlay'),
   imageOverlayImg: $('#imageOverlayImg'),
   btnImageOverlayClose: $('#btnImageOverlayClose'),
@@ -3636,6 +3646,10 @@ async function importAllJson(file) {
     var data = JSON.parse(text);
     var importedConvos = Array.isArray(data) ? data : (data && Array.isArray(data.conversations) ? data.conversations : null);
     if (!importedConvos || !importedConvos.length) {
+      if (data && (data.type === 'llm-chat-settings' || data.apiGroups || (data.settings && data.settings.apiGroups))) {
+        showToast('该文件为设置配置文件，请在「设置 -> 导入导出」中导入', 'warning');
+        return;
+      }
       showToast('未在文件中找到有效的对话数据', 'error');
       return;
     }
@@ -3692,6 +3706,178 @@ async function importAllJson(file) {
     showToast('恢复数据失败: ' + (err.message || 'JSON 格式解析错误'), 'error');
   } finally {
     if (dom.importJsonInput) dom.importJsonInput.value = '';
+  }
+}
+
+// ─── Settings Export & Import ──────────────────────────────────
+
+function getExportableSettings(includeApiKey) {
+  flushGroupForm();
+  flushConvoGroupForm();
+  var s = getSettings();
+  if (dom.settingProxyUrl) s.proxyUrl = dom.settingProxyUrl.value.trim().replace(/\/+$/, '');
+  if (dom.settingFontSize) s.appearance = { fontSize: parseInt(dom.settingFontSize.value, 10) || 14 };
+  if (dom.settingShowThinking) s.showThinking = dom.settingShowThinking.checked;
+
+  var clone = JSON.parse(JSON.stringify(s));
+  if (!includeApiKey && Array.isArray(clone.apiGroups)) {
+    clone.apiGroups.forEach(function (g) {
+      g.apiKey = '';
+    });
+  }
+  return {
+    version: 1,
+    type: 'llm-chat-settings',
+    exportDate: new Date().toISOString(),
+    settings: clone
+  };
+}
+
+function exportSettingsJson() {
+  try {
+    var includeKey = dom.settingExportIncludeKey ? dom.settingExportIncludeKey.checked : true;
+    var data = getExportableSettings(includeKey);
+    var dateStr = new Date().toISOString().slice(0, 10);
+    var filename = 'llm-chat-settings-' + (includeKey ? 'full-' : 'public-') + dateStr + '.json';
+    downloadFile(filename, JSON.stringify(data, null, 2), 'application/json;charset=utf-8');
+    showToast('设置配置已导出', 'success');
+  } catch (err) {
+    showToast('导出设置失败: ' + err.message, 'error');
+  }
+}
+
+async function copySettingsJson() {
+  try {
+    var includeKey = dom.settingExportIncludeKey ? dom.settingExportIncludeKey.checked : true;
+    var data = getExportableSettings(includeKey);
+    var text = JSON.stringify(data, null, 2);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      showToast('配置 JSON 已复制到剪贴板', 'success');
+    } else {
+      var ta = document.createElement('textarea');
+      ta.value = text;
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      document.body.removeChild(ta);
+      showToast('配置 JSON 已复制到剪贴板', 'success');
+    }
+  } catch (err) {
+    showToast('复制失败: ' + err.message, 'error');
+  }
+}
+
+function parseImportedSettingsData(rawJson) {
+  var data = typeof rawJson === 'string' ? JSON.parse(rawJson) : rawJson;
+  if (!data || typeof data !== 'object') {
+    throw new Error('无效的 JSON 数据');
+  }
+  // 检查是否误传了对话历史备份文件
+  if (Array.isArray(data) && data.length > 0 && data[0] && Array.isArray(data[0].messages)) {
+    throw new Error('该文件为对话备份文件，请在侧边栏底部的「恢复数据」中导入');
+  }
+  if (data && Array.isArray(data.conversations)) {
+    throw new Error('该文件为对话备份文件，请在侧边栏底部的「恢复数据」中导入');
+  }
+
+  // 格式 1: 标准包装格式 { type: 'llm-chat-settings', settings: { ... } }
+  if (data.settings && typeof data.settings === 'object') {
+    return normalizeSettings(data.settings);
+  }
+  // 格式 2: 直接导出的设置对象 { apiGroups: [ ... ], ... }
+  if (Array.isArray(data.apiGroups)) {
+    return normalizeSettings(data);
+  }
+  // 格式 3: 仅包含 API 分组数组 [ { name: "...", apiBase: "..." }, ... ]
+  if (Array.isArray(data) && data.length && (data[0].apiBase || data[0].name || data[0].models)) {
+    return normalizeSettings({ apiGroups: data });
+  }
+  // 格式 4: 旧版单组配置对象 { apiBase: "...", apiKey: "...", ... }
+  if (data.apiBase || data.models) {
+    return normalizeSettings(data);
+  }
+
+  throw new Error('未识别到有效的设置数据结构（需包含 apiGroups 或 settings）');
+}
+
+function applyImportedSettings(imported, mode) {
+  var current = getSettings();
+  var finalSettings;
+
+  if (mode === 'merge') {
+    finalSettings = JSON.parse(JSON.stringify(current));
+    var existingGroupIds = new Set((finalSettings.apiGroups || []).map(function (g) { return g.id; }));
+    var addedGroupCount = 0;
+
+    (imported.apiGroups || []).forEach(function (newG) {
+      var gCopy = Object.assign({}, newG);
+      if (!gCopy.id || existingGroupIds.has(gCopy.id)) {
+        gCopy.id = uid();
+      }
+      existingGroupIds.add(gCopy.id);
+      finalSettings.apiGroups.push(gCopy);
+      addedGroupCount++;
+    });
+
+    var existingConvoGroupIds = new Set((finalSettings.convoGroups || []).map(function (cg) { return cg.id; }));
+    (imported.convoGroups || []).forEach(function (newCG) {
+      var cgCopy = Object.assign({}, newCG);
+      if (!cgCopy.id || existingConvoGroupIds.has(cgCopy.id)) {
+        cgCopy.id = uid();
+      }
+      existingConvoGroupIds.add(cgCopy.id);
+      finalSettings.convoGroups.push(cgCopy);
+    });
+
+    if (!finalSettings.proxyUrl && imported.proxyUrl) {
+      finalSettings.proxyUrl = imported.proxyUrl;
+    }
+
+    finalSettings = normalizeSettings(finalSettings);
+    setSettings(finalSettings);
+    showToast('已成功合并导入 ' + addedGroupCount + ' 个 API 配置组', 'success');
+  } else {
+    finalSettings = normalizeSettings(imported);
+    setSettings(finalSettings);
+    showToast('配置导入成功（已覆盖全部设置）', 'success');
+  }
+
+  // 刷新所有关联界面与下拉选择器
+  loadSettingsForm();
+  applyFontSize();
+  renderGroupSelector();
+  renderSidebar();
+}
+
+async function handleImportSettingsFile(file) {
+  if (!file) return;
+  try {
+    var text = await file.text();
+    var imported = parseImportedSettingsData(text);
+    var mode = dom.importSettingsMode ? dom.importSettingsMode.value : 'replace';
+    applyImportedSettings(imported, mode);
+  } catch (err) {
+    showToast('导入失败: ' + err.message, 'error');
+  }
+}
+
+function handleImportSettingsText() {
+  if (!dom.importSettingsText) return;
+  var text = dom.importSettingsText.value.trim();
+  if (!text) {
+    showToast('请先粘贴配置 JSON 内容', 'warning');
+    return;
+  }
+  try {
+    var imported = parseImportedSettingsData(text);
+    var mode = dom.importSettingsMode ? dom.importSettingsMode.value : 'replace';
+    applyImportedSettings(imported, mode);
+    dom.importSettingsText.value = '';
+  } catch (err) {
+    showToast('导入失败: ' + err.message, 'error');
   }
 }
 
@@ -3886,6 +4072,27 @@ dom.btnSettingsClose.addEventListener('click', closeSettings);
 dom.btnSettingsCancel.addEventListener('click', closeSettings);
 dom.btnSettingsSave.addEventListener('click', saveSettingsForm);
 dom.settingsOverlay.addEventListener('click', function (e) { if (e.target === dom.settingsOverlay) closeSettings(); });
+if (dom.btnExportSettingsJson) dom.btnExportSettingsJson.addEventListener('click', exportSettingsJson);
+if (dom.btnCopySettingsJson) dom.btnCopySettingsJson.addEventListener('click', copySettingsJson);
+if (dom.btnSelectSettingsFile) {
+  dom.btnSelectSettingsFile.addEventListener('click', function () {
+    if (dom.importSettingsFileInput) dom.importSettingsFileInput.click();
+  });
+}
+if (dom.importSettingsFileInput) {
+  dom.importSettingsFileInput.addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (file) handleImportSettingsFile(file);
+    e.target.value = '';
+  });
+}
+if (dom.btnApplyImportSettingsText) dom.btnApplyImportSettingsText.addEventListener('click', handleImportSettingsText);
+if (dom.btnQuickExportSettings) dom.btnQuickExportSettings.addEventListener('click', exportSettingsJson);
+if (dom.btnQuickImportSettings) {
+  dom.btnQuickImportSettings.addEventListener('click', function () {
+    switchSettingsTab('backup');
+  });
+}
 
 dom.btnRenameConvo.addEventListener('click', function () { openRenameConvo(state.currentConvoId); });
 dom.btnRenameConvoClose.addEventListener('click', closeRenameConvo);

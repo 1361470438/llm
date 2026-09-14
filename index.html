@@ -213,6 +213,7 @@
         <button type="button" class="settings-tab active" data-tab="api">API 配置</button>
         <button type="button" class="settings-tab" data-tab="convogroups">对话分组</button>
         <button type="button" class="settings-tab" data-tab="ui">界面</button>
+        <button type="button" class="settings-tab" data-tab="backup">导入导出</button>
       </div>
 
       <div class="settings-pane active" data-pane="api">
@@ -306,10 +307,61 @@
         </div>
       </div>
 
+      <div class="settings-pane" data-pane="backup">
+        <div class="settings-section">
+          <div class="pane-head"><h4>导出配置</h4></div>
+          <p class="hint" style="margin-top: 0; margin-bottom: 12px;">导出包含 API 配置组、模型列表、接口协议、代理网关及界面设置的 JSON 备份。</p>
+          <label class="switch-row" style="margin-bottom: 12px;">
+            <span>导出时包含 API Key</span>
+            <input type="checkbox" id="settingExportIncludeKey" checked>
+          </label>
+          <p class="hint" style="margin-top: -6px; margin-bottom: 14px; font-size: 11px;">取消勾选可安全将配置与模型列表分享给他人，不会泄露私有密钥。</p>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button type="button" class="btn-primary btn-sm" id="btnExportSettingsJson">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+              下载配置文件 (.json)
+            </button>
+            <button type="button" class="btn-secondary btn-sm" id="btnCopySettingsJson">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 4px;"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+              复制配置 JSON
+            </button>
+          </div>
+        </div>
+
+        <div class="settings-section" style="margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border, #333);">
+          <div class="pane-head"><h4>导入配置</h4></div>
+          <label>导入模式</label>
+          <select id="importSettingsMode">
+            <option value="replace">覆盖现有设置（完全替换）</option>
+            <option value="merge">合并追加 API 组（保留现有，仅添加新组）</option>
+          </select>
+          <div style="margin-top: 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;">
+            <button type="button" class="btn-secondary btn-sm" id="btnSelectSettingsFile">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align: -2px; margin-right: 4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+              选择 JSON 文件导入
+            </button>
+            <input type="file" id="importSettingsFileInput" accept=".json,application/json" class="visually-hidden">
+            <span style="font-size: 11px; color: var(--text-sub, #888);">支持导入本系统导出的各类配置文件</span>
+          </div>
+
+          <label style="margin-top: 16px;">或直接粘贴配置 JSON</label>
+          <textarea id="importSettingsText" rows="4" placeholder="在此粘贴导出的配置 JSON 字符串..."></textarea>
+          <div style="margin-top: 8px;">
+            <button type="button" class="btn-primary btn-sm" id="btnApplyImportSettingsText">从文本导入</button>
+          </div>
+        </div>
+      </div>
+
     </div>
-    <div class="modal-footer">
-      <button class="btn-secondary" id="btnSettingsCancel">取消</button>
-      <button class="btn-primary" id="btnSettingsSave">保存设置</button>
+    <div class="modal-footer settings-modal-footer">
+      <div class="settings-modal-footer-left">
+        <button type="button" class="btn-secondary btn-sm" id="btnQuickExportSettings" title="快速导出配置">导出配置</button>
+        <button type="button" class="btn-secondary btn-sm" id="btnQuickImportSettings" title="导入与切换配置">导入配置</button>
+      </div>
+      <div class="settings-modal-footer-right">
+        <button class="btn-secondary" id="btnSettingsCancel">取消</button>
+        <button class="btn-primary" id="btnSettingsSave">保存设置</button>
+      </div>
     </div>
   </div>
 </div>
