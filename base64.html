@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>图片转 Base64</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  background: #0f0f1a;
+  color: #e0e0e8;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  padding: 40px 16px;
+}
+.wrap {
+  width: 100%;
+  max-width: 720px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+h1 { font-size: 22px; font-weight: 600; text-align: center; letter-spacing: -0.3px; }
+.drop-zone {
+  border: 2px dashed #3a3a58;
+  border-radius: 16px;
+  padding: 48px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .2s;
+  background: #181828;
+}
+.drop-zone:hover, .drop-zone.drag-over {
+  border-color: #7c5ce7;
+  background: #1c1c32;
+}
+.drop-zone svg { color: #6a6a88; margin-bottom: 12px; }
+.drop-zone p { color: #888; font-size: 14px; }
+.drop-zone span { color: #a78bfa; }
+.info-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+  color: #888;
+  min-height: 24px;
+}
+.preview {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.preview img {
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 10px;
+  border: 1px solid #2a2a48;
+  object-fit: contain;
+  background: #111;
+}
+.preview .meta { font-size: 13px; color: #888; line-height: 1.7; }
+.preview .meta strong { color: #ccc; }
+.output-section { display: flex; flex-direction: column; gap: 10px; }
+.output-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.output-header label { font-size: 14px; font-weight: 500; }
+.btns { display: flex; gap: 8px; }
+.btn {
+  padding: 7px 16px;
+  border-radius: 8px;
+  border: 1px solid #3a3a58;
+  background: #181828;
+  color: #ccc;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+  font-family: inherit;
+}
+.btn:hover { border-color: #7c5ce7; color: #fff; }
+.btn.primary { background: #7c5ce7; border-color: #7c5ce7; color: #fff; }
+.btn.primary:hover { background: #8f6ff0; }
+textarea {
+  width: 100%;
+  min-height: 100px;
+  background: #181828;
+  border: 1px solid #3a3a58;
+  border-radius: 12px;
+  padding: 14px;
+  color: #ccc;
+  font-size: 12px;
+  font-family: 'Consolas', 'Courier New', monospace;
+  resize: vertical;
+  word-break: break-all;
+}
+textarea:focus { outline: none; border-color: #7c5ce7; }
+.toast {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 10px 22px;
+  border-radius: 10px;
+  font-size: 13px;
+  background: #1a3a2a;
+  color: #a3e9a4;
+  border: 1px solid #2d6a4f;
+  z-index: 100;
+  animation: fadeIn .25s;
+}
+@keyframes fadeIn { from { opacity: 0; transform: translateX(-50%) translateY(-8px); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>图片 → Base64 编码</h1>
+
+  <div class="drop-zone" id="dropZone">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+      <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+    </svg>
+    <p>拖拽图片到此处，或 <span>点击选择</span></p>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+  </div>
+
+  <div class="info-bar" id="infoBar"></div>
+
+  <div class="preview" id="preview" style="display:none"></div>
+
+  <div class="output-section" id="outputSection" style="display:none">
+    <div class="output-header">
+      <label>Base64 编码</label>
+      <div class="btns">
+        <button class="btn" id="btnCopyData">复制编码</button>
+        <button class="btn" id="btnCopyTag">复制 &lt;img&gt; 标签</button>
+        <button class="btn" id="btnDownload">下载图片</button>
+      </div>
+    </div>
+    <textarea id="output" readonly></textarea>
+  </div>
+</div>
+
+<script>
+var $ = function (s) { return document.querySelector(s); };
+var dropZone = $('#dropZone');
+var fileInput = $('#fileInput');
+var infoBar = $('#infoBar');
+var preview = $('#preview');
+var outputSection = $('#outputSection');
+var output = $('#output');
+var toastTimer;
+
+function showToast(msg) {
+  var old = document.querySelector('.toast');
+  if (old) old.remove();
+  var t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { t.remove(); }, 2000);
+}
+
+function formatSize(bytes) {
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+  return (bytes / 1048576).toFixed(1) + ' MB';
+}
+
+function resizeImage(file, maxW, maxH, quality) {
+  maxW = maxW || 1200; maxH = maxH || 1200; quality = quality || 0.85;
+  return new Promise(function (resolve, reject) {
+    var reader = new FileReader();
+    reader.onload = function (e) {
+      var img = new Image();
+      img.onload = function () {
+        var w = img.width, h = img.height;
+        var resized = w > maxW || h > maxH;
+        if (resized) {
+          var r = Math.min(maxW / w, maxH / h);
+          w = Math.round(w * r); h = Math.round(h * r);
+        }
+        var canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext('2d');
+
+        // 小于 120KB 的 PNG 保留原图格式与透明通道；大图/截图自动以高质量 JPEG (0.85) 压缩，体积缩减 80%
+        var isSmallPng = (file.type === 'image/png' && file.size < 120 * 1024);
+        var outputType = isSmallPng ? 'image/png' : 'image/jpeg';
+        if (!isSmallPng) {
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+        }
+        ctx.drawImage(img, 0, 0, w, h);
+        var dataUrl = canvas.toDataURL(outputType, quality);
+        resolve({
+          dataUrl: dataUrl,
+          width: w,
+          height: h,
+          originalW: img.width,
+          originalH: img.height,
+          resized: resized,
+          size: file.size,
+          mime: outputType,
+          name: file.name,
+          base64Len: dataUrl.length
+        });
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+function handleFile(file) {
+  if (!file.type.startsWith('image/')) { showToast('请选择图片文件'); return; }
+
+  resizeImage(file).then(function (info) {
+    var sizeStr = formatSize(info.size);
+    var resizedNote = info.resized
+      ? ' (原始 ' + info.originalW + '×' + info.originalH + ', 已缩小至 ' + info.width + '×' + info.height + ')'
+      : '';
+
+    infoBar.textContent = info.name + ' — ' + sizeStr + resizedNote;
+
+    preview.style.display = 'flex';
+    preview.innerHTML =
+      '<img src="' + info.dataUrl + '" alt="preview">' +
+      '<div class="meta">' +
+        '<strong>' + info.name + '</strong><br>' +
+        info.width + ' × ' + info.height + resizedNote + '<br>' +
+        sizeStr + ' → base64 长度: ' + info.base64Len.toLocaleString() + ' 字符' +
+      '</div>';
+
+    outputSection.style.display = 'flex';
+    output.value = info.dataUrl;
+  }).catch(function (err) {
+    showToast('转换失败: ' + err.message);
+  });
+}
+
+// Drop zone events
+dropZone.addEventListener('click', function () { fileInput.click(); });
+
+dropZone.addEventListener('dragover', function (e) { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', function () { dropZone.classList.remove('drag-over'); });
+dropZone.addEventListener('drop', function (e) {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  var file = e.dataTransfer.files[0];
+  if (file) handleFile(file);
+});
+
+fileInput.addEventListener('change', function (e) {
+  var file = e.target.files[0];
+  if (file) handleFile(file);
+  fileInput.value = '';
+});
+
+// Robust Clipboard Copy (兼容 HTTP/内网/file:// 安全沙箱)
+function copyText(text, successMsg) {
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(function () {
+      showToast(successMsg);
+    }).catch(function () {
+      fallbackCopy(text, successMsg);
+    });
+  } else {
+    fallbackCopy(text, successMsg);
+  }
+}
+function fallbackCopy(text, successMsg) {
+  var ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(ta);
+  ta.select();
+  try {
+    document.execCommand('copy');
+    showToast(successMsg);
+  } catch (e) {
+    showToast('复制失败，请手动全选复制');
+  }
+  ta.remove();
+}
+
+// Buttons
+$('#btnCopyData').addEventListener('click', function () {
+  copyText(output.value, '已复制 base64 编码');
+});
+
+$('#btnCopyTag').addEventListener('click', function () {
+  copyText('<img src="' + output.value + '">', '已复制 img 标签');
+});
+
+$('#btnDownload').addEventListener('click', function () {
+  var a = document.createElement('a');
+  a.href = output.value;
+  a.download = 'image.png';
+  a.click();
+});
+
+// Paste from clipboard
+document.addEventListener('paste', function (e) {
+  var items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].type.indexOf('image/') === 0) {
+      e.preventDefault();
+      handleFile(items[i].getAsFile());
+      return;
+    }
+  }
+});
+</script>
+</body>
+</html>

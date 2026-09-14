@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>杂货店 PRO MAX - AI 智能对话</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="js/vendor/marked.min.js"></script>
+<script src="js/vendor/marked-footnote.min.js"></script>
+<script src="js/vendor/hljs.min.js"></script>
+<script src="js/vendor/hljs-verilog.min.js"></script>
+<script src="js/vendor/purify.min.js"></script>
+<link rel="stylesheet" href="js/vendor/hljs-atom-one-dark.min.css">
+<link rel="stylesheet" href="js/vendor/katex/katex.min.css">
+<script src="js/vendor/katex/katex.min.js"></script>
+</head>
+<body>
+
+<div class="app-container">
+
+  <!-- ─── Sidebar ────────────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <h1 class="logo">
+        <span class="logo-icon">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2L2 7l10 5 10-5-10-5z"/>
+            <path d="M2 17l10 5 10-5"/>
+            <path d="M2 12l10 5 10-5"/>
+          </svg>
+        </span>
+        <span class="logo-text">杂货店</span>
+        <span class="logo-badge">PRO MAX</span>
+      </h1>
+    </div>
+
+    <button class="btn-new-chat" id="btnNewChat">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+      <span>新建对话</span>
+    </button>
+
+    <div class="conversation-list" id="conversationList">
+      <!-- Dynamic -->
+    </div>
+
+    <div class="sidebar-footer">
+      <button class="btn-sidebar" id="btnExportMd" title="导出当前对话为 Markdown">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        <span>导出对话</span>
+      </button>
+      <button class="btn-sidebar" id="btnExportJson" title="备份全部对话为 JSON">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span>备份数据</span>
+      </button>
+      <button class="btn-sidebar" id="btnImportJson" title="从 JSON 备份恢复对话">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <span>恢复数据</span>
+      </button>
+      <input type="file" id="importJsonInput" accept=".json,application/json" class="visually-hidden">
+      <button class="btn-sidebar" id="btnSettings" title="设置">
+        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+        <span>设置</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ─── Mobile sidebar toggle ──────────────────────────────── -->
+  <button class="sidebar-toggle" id="sidebarToggle" title="切换侧边栏">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+  </button>
+
+  <!-- ─── Main Content ───────────────────────────────────────── -->
+  <main class="main-content">
+    <!-- Header -->
+    <header class="chat-header">
+      <div class="header-left">
+        <h2 class="conversation-title" id="conversationTitle">New Chat</h2>
+        <button class="conversation-rename-btn" id="btnRenameConvo" title="重命名当前对话" aria-label="重命名当前对话">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
+        </button>
+      </div>
+      <div class="header-right">
+        <div class="group-selector" id="groupSelector">
+          <button class="group-selector-btn" id="groupSelectorBtn" title="切换 API 配置组">
+            <span class="group-status-dot"></span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            <span id="groupSelectorLabel">默认配置</span>
+            <svg class="chevron-arrow" width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="group-dropdown" id="groupDropdown" style="display:none"></div>
+        </div>
+        <div class="model-selector" id="modelSelector">
+          <svg class="model-selector-sparkle" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
+          <input
+            type="text"
+            id="modelInput"
+            class="model-input"
+            placeholder="选择或输入模型..."
+            autocomplete="off"
+          >
+          <button class="model-dropdown-arrow" id="modelDropdownArrow" tabindex="-1">
+            <svg width="10" height="6" viewBox="0 0 10 6" fill="none"><path d="M1 1L5 5L9 1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div class="model-dropdown" id="modelDropdown" style="display:none"></div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Messages Area -->
+    <div class="messages-container" id="messagesContainer">
+      <div class="welcome-screen" id="welcomeScreen">
+        <div class="welcome-hero-glow"></div>
+        <div class="welcome-icon">
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z"/>
+            <path d="M12 6v6l4 2"/>
+          </svg>
+        </div>
+        <h2 id="welcomeTitle">开始对话</h2>
+        <p id="welcomeSub">选择一个模型，然后输入你的问题开始与 AI 交流</p>
+        <div class="welcome-suggestions">
+          <button class="suggestion-chip" data-prompt="用中文通俗易懂地解释量子计算的基本原理、量子叠加态与量子纠缠">
+            <div class="suggestion-chip-icon">💡</div>
+            <div class="suggestion-chip-body">
+              <span class="suggestion-chip-title">解释量子计算原理</span>
+              <span class="suggestion-chip-desc">用生动的比喻解析叠加态与纠缠</span>
+            </div>
+            <svg class="suggestion-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+          <button class="suggestion-chip" data-prompt="用Python实现高效快速排序算法，并给出详细注释与时间复杂度分析">
+            <div class="suggestion-chip-icon">💻</div>
+            <div class="suggestion-chip-body">
+              <span class="suggestion-chip-title">写快速排序算法</span>
+              <span class="suggestion-chip-desc">Python 优雅实现与复杂度剖析</span>
+            </div>
+            <svg class="suggestion-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+          <button class="suggestion-chip" data-prompt="帮我分析上传图片中的主体细节、色彩构成并提炼核心信息">
+            <div class="suggestion-chip-icon">🖼️</div>
+            <div class="suggestion-chip-body">
+              <span class="suggestion-chip-title">多模态分析图片</span>
+              <span class="suggestion-chip-desc">深度解析图表、构图与文本信息</span>
+            </div>
+            <svg class="suggestion-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+          <button class="suggestion-chip" data-prompt="写一封专业、严谨且富有亲和力的英文商务合作洽谈邮件">
+            <div class="suggestion-chip-icon">✍️</div>
+            <div class="suggestion-chip-body">
+              <span class="suggestion-chip-title">写专业商务邮件</span>
+              <span class="suggestion-chip-desc">地道得体的高管合作邀约信件</span>
+            </div>
+            <svg class="suggestion-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 对话速览（左侧话题标记，悬停显示） -->
+    <div class="chat-outline hidden" id="chatOutline" title="对话话题（悬停查看）">
+      <div class="chat-outline-inner">
+        <div class="chat-outline-head" id="chatOutlineHead"></div>
+        <div class="chat-outline-list" id="chatOutlineList"></div>
+      </div>
+    </div>
+
+    <!-- Input Area -->
+    <div class="input-area">
+      <div class="input-container">
+        <div class="attachment-previews" id="attachmentPreviews"></div>
+        <input type="file" id="fileInput" class="visually-hidden" multiple
+          accept="image/*,.txt,.md,.markdown,.csv,.tsv,.json,.xml,.html,.htm,.css,.js,.ts,.jsx,.tsx,.py,.java,.c,.h,.cpp,.hpp,.cs,.go,.rs,.php,.rb,.swift,.kt,.kts,.sql,.yaml,.yml,.toml,.ini,.conf,.log,.rtf,.pdf,.doc,.docx,.xls,.xlsx,.xlsm,.ppt,.pptx">
+        <div class="input-row">
+          <button type="button" class="btn-file-upload" id="btnFileUpload" title="上传文件给 AI">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+            <span>文件</span>
+          </button>
+          <textarea
+            id="messageInput"
+            class="message-input"
+            placeholder="输入你的问题... (Shift+Enter 换行, Enter 发送)"
+            rows="1"
+          ></textarea>
+          <button class="btn-send" id="btnSend" title="发送消息">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
+              <line x1="22" y1="2" x2="11" y2="13"/>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="input-footer-hint">
+        <span>Enter 发送 · Shift+Enter 换行</span>
+        <span class="hint-dot">·</span>
+        <span>支持拖拽与粘贴文件/图片</span>
+        <span class="hint-dot">·</span>
+        <span class="hint-ai">AI 生成内容仅供参考</span>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- ─── Settings Overlay ──────────────────────────────────────── -->
+<div class="overlay" id="settingsOverlay">
+  <div class="modal settings-modal">
+    <div class="modal-header">
+      <h3>设置</h3>
+      <button class="btn-close" id="btnSettingsClose">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body settings-body">
+      <div class="settings-tabs" id="settingsTabs">
+        <button type="button" class="settings-tab active" data-tab="api">API 配置</button>
+        <button type="button" class="settings-tab" data-tab="convogroups">对话分组</button>
+        <button type="button" class="settings-tab" data-tab="ui">界面</button>
+      </div>
+
+      <div class="settings-pane active" data-pane="api">
+        <div class="settings-section">
+          <div class="pane-head">
+            <h4>API 配置组</h4>
+            <button class="btn-secondary btn-sm" id="btnAddGroup">＋ 新建组</button>
+          </div>
+          <div class="group-tabs" id="groupTabs"></div>
+          <div class="form-row">
+            <div>
+              <label>组名称</label>
+              <input type="text" id="settingGroupName" placeholder="如：DeepSeek">
+            </div>
+            <div>
+              <label>API Key</label>
+              <div class="password-field">
+                <input type="password" id="settingGroupKey" placeholder="sk-...">
+                <button class="btn-eye" data-target="settingGroupKey">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="form-row">
+            <div>
+              <label>API Base URL</label>
+              <input type="text" id="settingGroupBase" placeholder="https://api.openai.com/v1">
+            </div>
+            <div>
+              <label>接口协议</label>
+              <select id="settingGroupProtocol">
+                <option value="auto">自动识别 (根据 URL)</option>
+                <option value="chat">Chat Completions (/chat/completions)</option>
+                <option value="responses">Responses API (/responses)</option>
+              </select>
+            </div>
+          </div>
+          <div class="model-edit-section">
+            <h4>模型列表</h4>
+            <div class="model-edit-list" id="modelEditList"></div>
+            <div class="model-add-row">
+              <input type="text" id="settingModelInput" placeholder="输入模型名称，如 gpt-4o">
+              <button class="btn-primary btn-sm" id="btnAddModel">添加</button>
+            </div>
+            <p class="hint">切换组后模型下拉列表随之切换</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-pane" data-pane="convogroups">
+        <div class="settings-section">
+          <div class="pane-head">
+            <h4>对话分组</h4>
+            <button class="btn-secondary btn-sm" id="btnAddConvoGroup">＋ 新建分组</button>
+          </div>
+          <div class="group-tabs" id="convoGroupTabs"></div>
+          <label>分组名称</label>
+          <input type="text" id="settingConvoGroupName" placeholder="如：科研、代码、闲聊">
+          <label>系统提示词（该组对话固定使用）</label>
+          <textarea id="settingConvoGroupPrompt" rows="8" placeholder="该组所有对话发送请求时固定的系统提示词..."></textarea>
+          <button class="btn-danger btn-sm" id="btnDeleteConvoGroup">删除当前分组</button>
+          <p class="hint">删除分组后其对话回到「未分组」；修改提示词后该组对话的输入缓存前缀会失效一次</p>
+        </div>
+      </div>
+
+      <div class="settings-pane" data-pane="ui">
+        <div class="settings-section">
+          <div class="pane-head"><h4>界面</h4></div>
+          <label>消息字体大小</label>
+          <select id="settingFontSize">
+            <option value="13">小（13px）</option>
+            <option value="14">标准（14px）</option>
+            <option value="15">中（15px）</option>
+            <option value="16">大（16px）</option>
+            <option value="18">特大（18px）</option>
+          </select>
+          <label class="switch-row"><span>显示思维链（思考过程）</span><input type="checkbox" id="settingShowThinking"></label>
+          <p class="hint">默认关闭：仅状态栏显示「模型思考中…」；开启后展示每条回复的思考内容</p>
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="btnSettingsCancel">取消</button>
+      <button class="btn-primary" id="btnSettingsSave">保存设置</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Image Preview Overlay ─────────────────────────────────── -->
+<div class="overlay" id="imageOverlay">
+  <div class="image-overlay-content">
+    <button class="btn-close-image" id="btnImageOverlayClose">
+      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    </button>
+    <img id="imageOverlayImg" src="" alt="Preview">
+  </div>
+</div>
+
+<!-- ─── 删除确认弹窗 ─────────────────────────────────────────── -->
+<div class="overlay" id="deleteConfirmOverlay">
+  <div class="modal confirm-modal">
+    <div class="modal-header">
+      <h3>删除对话</h3>
+      <button class="btn-close" id="btnDeleteConfirmClose">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <p class="confirm-text" id="deleteConfirmText">确定要删除这个对话吗？此操作不可撤销。</p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="btnDeleteConfirmCancel">取消</button>
+      <button class="btn-danger" id="btnDeleteConfirmOk">删除</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── 重命名对话弹窗 ───────────────────────────────────────── -->
+<div class="overlay" id="renameConvoOverlay">
+  <div class="modal rename-modal">
+    <div class="modal-header">
+      <h3>重命名对话</h3>
+      <button class="btn-close" id="btnRenameConvoClose">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body rename-modal-body">
+      <label for="renameConvoInput">对话名称</label>
+      <input type="text" id="renameConvoInput" maxlength="80" placeholder="输入对话名称">
+    </div>
+    <div class="modal-footer">
+      <button class="btn-secondary" id="btnRenameConvoCancel">取消</button>
+      <button class="btn-primary" id="btnRenameConvoSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ─── Toast ─────────────────────────────────────────────────── -->
+<div class="toast-container" id="toastContainer"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+{
+  "name": "llm-chat",
+  "version": "2.0.0",
+  "description": "纯静态 AI 对话网页 - 适配艾可秀平台，无需后端",
+  "private": true
+}
