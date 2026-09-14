@@ -96,6 +96,7 @@ const dom = {
   settingGroupName: $('#settingGroupName'),
   settingGroupBase: $('#settingGroupBase'),
   settingGroupProtocol: $('#settingGroupProtocol'),
+  settingProxyUrl: $('#settingProxyUrl'),
   settingGroupKey: $('#settingGroupKey'),
   modelEditList: $('#modelEditList'),
   settingModelInput: $('#settingModelInput'),
@@ -499,6 +500,8 @@ function normalizeSettings(s) {
     return g;
   });
   s.appearance = Object.assign({ fontSize: 14 }, s.appearance || {});
+  // 全局 API 跨域代理网关（空为同域自动代理）
+  s.proxyUrl = typeof s.proxyUrl === 'string' ? s.proxyUrl : '';
   // 思维链默认关闭：仅状态栏橙色「思考中」，开启后才显示思考内容
   s.showThinking = !!s.showThinking;
   return s;
@@ -2202,7 +2205,14 @@ async function streamApiResponse() {
           cleanErr = errText.slice(0, 180);
         }
       }
-      throw new Error('API ' + res.status + ' (' + (cleanErr || '请求失败') + ')');
+      if (!cleanErr) {
+        if (res.status === 404) cleanErr = '端点未找到 (404 Not Found)，请检查 API Base 地址或接口协议';
+        else if (res.status === 401) cleanErr = '认证失败，API Key 无效或未授权';
+        else if (res.status === 403) cleanErr = '访问被拒绝 (403 Forbidden)，目标网关阻断请求';
+        else if (res.status === 502) cleanErr = '网关转发失败 (502 Bad Gateway)';
+        else cleanErr = 'HTTP ' + res.status + ' 错误';
+      }
+      throw new Error('API ' + res.status + ' (' + cleanErr + ')');
     }
 
     var isSse = (res.headers.get('content-type') || '').indexOf('text/event-stream') !== -1;
@@ -2683,23 +2693,48 @@ function resolveApiEndpoint(apiBase, protocol) {
   }
 }
 
-// 智能代理决策：跨域外部 API 自动通过当前站点的同域 /api/proxy 服务端代理转发，彻底免除浏览器 CORS 与 OPTIONS 403 阻断
+// 智能代理决策：跨域外部 API 自动通过代理网关中转，彻底免除浏览器 CORS 与 OPTIONS 403 阻断
 function prepareApiRequest(targetEndpoint, headers) {
+  var s = typeof getSettings === 'function' ? getSettings() : {};
+  var customProxy = (s.proxyUrl || '').trim().replace(/\/+$/, '');
   var isWeb = typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http');
-  if (isWeb && /^https?:\/\//i.test(targetEndpoint)) {
+
+  // 1. 如果用户在设置中配置了独立的 Worker 代理网关（如 https://api.yourdomain.com 或 Cloudflare Worker 域名）
+  if (customProxy && /^https?:\/\//i.test(customProxy)) {
     try {
-      var u = new URL(targetEndpoint);
-      if (u.origin !== window.location.origin && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
-        var reqHeaders = Object.assign({}, headers);
-        reqHeaders['x-target-url'] = targetEndpoint;
+      var uTarget1 = new URL(targetEndpoint);
+      // 本地服务（如 Ollama）直接直连，不走代理
+      if (uTarget1.hostname !== 'localhost' && uTarget1.hostname !== '127.0.0.1') {
+        var reqHeaders1 = Object.assign({}, headers);
+        reqHeaders1['x-target-url'] = targetEndpoint;
+        var proxyUrl = customProxy.endsWith('/api/proxy') ? customProxy : (customProxy + '/api/proxy');
         return {
-          url: '/api/proxy',
-          headers: reqHeaders,
+          url: proxyUrl,
+          headers: reqHeaders1,
           isProxied: true
         };
       }
     } catch (_) {}
   }
+
+  // 2. 如果未配置自定义代理网关，但当前运行在 Web 环境 (如 Cloudflare Pages) 下
+  if (isWeb && /^https?:\/\//i.test(targetEndpoint)) {
+    try {
+      var uTarget2 = new URL(targetEndpoint);
+      // 如果目标域名与当前页面域名不同，且不是本地服务，自动通过当前站点的同域 /api/proxy 中转
+      if (uTarget2.origin !== window.location.origin && uTarget2.hostname !== 'localhost' && uTarget2.hostname !== '127.0.0.1') {
+        var reqHeaders2 = Object.assign({}, headers);
+        reqHeaders2['x-target-url'] = targetEndpoint;
+        return {
+          url: '/api/proxy',
+          headers: reqHeaders2,
+          isProxied: true
+        };
+      }
+    } catch (_) {}
+  }
+
+  // 3. 目标与当前页面同源、或是相对路径、或是本地服务，直接发起请求
   return {
     url: targetEndpoint,
     headers: headers,
@@ -3255,6 +3290,7 @@ function loadSettingsForm() {
   dom.settingFontSize.value = String((s.appearance || {}).fontSize || 14);
   dom.settingShowThinking.checked = !!s.showThinking;
   state.editingGroupId = s.activeGroupId;
+  if (dom.settingProxyUrl) dom.settingProxyUrl.value = s.proxyUrl || '';
   renderGroupTabs();
   loadGroupForm();
   renderModelEditList();
@@ -3436,6 +3472,7 @@ function saveSettingsForm() {
   var s = getSettings();
   s.appearance = { fontSize: parseInt(dom.settingFontSize.value, 10) || 14 };
   s.showThinking = dom.settingShowThinking.checked;
+  if (dom.settingProxyUrl) s.proxyUrl = dom.settingProxyUrl.value.trim().replace(/\/+$/, '');
   setSettings(s);
   applyFontSize();
   renderGroupSelector();

@@ -77,12 +77,14 @@ export async function onRequest(context) {
     newHeaders.delete('cf-visitor');
 
     // 4. 向上游目标 API 发起真实请求
-    const upstreamRequest = new Request(targetUrl.toString(), {
+    const reqInit = {
       method: request.method,
       headers: newHeaders,
       body: request.body,
       redirect: 'follow',
-    });
+    };
+    if (request.body) reqInit.duplex = 'half';
+    const upstreamRequest = new Request(targetUrl.toString(), reqInit);
 
     const response = await fetch(upstreamRequest);
 

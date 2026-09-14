@@ -260,6 +260,17 @@
             </div>
             <p class="hint">切换组后模型下拉列表随之切换</p>
           </div>
+
+          <div class="proxy-edit-section" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border, #333);">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
+              <h4 style="margin: 0; font-size: 13px; font-weight: 600;">API 跨域代理网关 (可选)</h4>
+              <span style="font-size: 11px; color: var(--text-sub, #888);">免除浏览器跨域限制与 403 阻断</span>
+            </div>
+            <input type="text" id="settingProxyUrl" placeholder="如：https://api.yourdomain.com 或 Cloudflare Worker 地址（留空则同域自动代理）">
+            <p class="hint" style="margin-top: 4px; font-size: 11px; color: var(--text-sub, #888);">
+              配置后，所有跨域 API 请求自动经由该网关转发；部署在 Cloudflare Pages 时留空即可。
+            </p>
+          </div>
         </div>
       </div>
 
