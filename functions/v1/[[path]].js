@@ -33,8 +33,13 @@ export async function onRequest(context) {
     const upstreamBase = env.UPSTREAM_BASE || DEFAULT_UPSTREAM;
     const targetBase = new URL(upstreamBase);
 
-    // 拼接上游完整地址（例如：https://www.ssxinjie.com/v1/responses）
-    const targetPath = (targetBase.pathname.replace(/\/+$/, '') + '/' + url.pathname.replace(/^\/+/, '')).replace(/\/+/g, '/');
+    // 拼接上游完整地址（例如：https://www.ssxinjie.com/v1/responses），智能防止重复 /v1
+    let basePath = targetBase.pathname.replace(/\/+$/, '');
+    let reqPath = '/' + url.pathname.replace(/^\/+/, '');
+    if (basePath.endsWith('/v1') && reqPath.startsWith('/v1/')) {
+      reqPath = reqPath.slice(3);
+    }
+    const targetPath = (basePath + reqPath).replace(/\/+/g, '/');
     const targetUrl = new URL(targetPath + url.search, targetBase.origin);
 
     const newHeaders = new Headers(request.headers);

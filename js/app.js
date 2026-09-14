@@ -2632,7 +2632,15 @@ function determineApiProtocol(group) {
 }
 
 function resolveApiEndpoint(apiBase, protocol) {
-  var base = (apiBase || 'https://api.openai.com/v1').trim().replace(/\/+$/, '');
+  var base = (apiBase || '').trim().replace(/\/+$/, '');
+  // 如果未配置 API Base：在 Web 域名下运行自动默认走同域服务端代理 /v1；本地文件默认走官方 OpenAI
+  if (!base) {
+    if (typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http')) {
+      base = '/v1';
+    } else {
+      base = 'https://api.openai.com/v1';
+    }
+  }
   // 智能补齐 /v1：如果用户输入的是纯域名（如 https://www.ssxinjie.com）或根路径 /，自动补充标准 /v1 前缀
   try {
     var dummyOrigin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : 'http://localhost';
