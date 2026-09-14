@@ -2114,10 +2114,15 @@ async function streamApiResponse() {
     }
   }
 
+  var apiReq = prepareApiRequest(endpoint, {
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + group.apiKey
+  });
+
   try {
-    var res = await fetch(endpoint, {
+    var res = await fetch(apiReq.url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + group.apiKey },
+      headers: apiReq.headers,
       body: JSON.stringify(body),
       signal: state.abortController.signal,
     });
@@ -2142,9 +2147,9 @@ async function streamApiResponse() {
         bodyChanged = true;
       }
       if (bodyChanged) {
-        res = await fetch(endpoint, {
+        res = await fetch(apiReq.url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + group.apiKey },
+          headers: apiReq.headers,
           body: JSON.stringify(body),
           signal: state.abortController.signal,
         });
@@ -2159,9 +2164,13 @@ async function streamApiResponse() {
         var fallbackBody = fallbackProto === 'responses'
           ? buildResponsesBody(state.currentMessages, model, true)
           : buildBody(state.currentMessages, model, true);
-        var fallbackRes = await fetch(fallbackEndpoint, {
+        var fallbackReq = prepareApiRequest(fallbackEndpoint, {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + group.apiKey
+        });
+        var fallbackRes = await fetch(fallbackReq.url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + group.apiKey },
+          headers: fallbackReq.headers,
           body: JSON.stringify(fallbackBody),
           signal: state.abortController.signal,
         });
@@ -2169,6 +2178,7 @@ async function streamApiResponse() {
           res = fallbackRes;
           activeProtocol = fallbackProto;
           endpoint = fallbackEndpoint;
+          apiReq = fallbackReq;
         }
       }
     }
@@ -2671,6 +2681,30 @@ function resolveApiEndpoint(apiBase, protocol) {
     }
     return base + '/chat/completions';
   }
+}
+
+// 智能代理决策：跨域外部 API 自动通过当前站点的同域 /api/proxy 服务端代理转发，彻底免除浏览器 CORS 与 OPTIONS 403 阻断
+function prepareApiRequest(targetEndpoint, headers) {
+  var isWeb = typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http');
+  if (isWeb && /^https?:\/\//i.test(targetEndpoint)) {
+    try {
+      var u = new URL(targetEndpoint);
+      if (u.origin !== window.location.origin && u.hostname !== 'localhost' && u.hostname !== '127.0.0.1') {
+        var reqHeaders = Object.assign({}, headers);
+        reqHeaders['x-target-url'] = targetEndpoint;
+        return {
+          url: '/api/proxy',
+          headers: reqHeaders,
+          isProxied: true
+        };
+      }
+    } catch (_) {}
+  }
+  return {
+    url: targetEndpoint,
+    headers: headers,
+    isProxied: false
+  };
 }
 
 function buildResponsesBody(messages, model, stream) {
