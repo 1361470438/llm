@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>长鑫杂货店</title>
+<title>杂货店</title>
 <link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="icon" type="image/png" sizes="192x192" href="favicon.png">
 <link rel="shortcut icon" href="favicon.svg">
@@ -26,10 +26,10 @@
   <aside class="sidebar" id="sidebar">
     <div class="sidebar-header">
       <h1 class="logo">
-        <span class="logo-icon" title="长鑫杂货店">
-          <img src="assets/grocery-icon.jpg" alt="长鑫杂货店" style="width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);">
+        <span class="logo-icon" title="杂货店">
+          <img src="assets/grocery-icon.jpg" alt="杂货店" style="width: 100%; height: 100%; object-fit: cover; border-radius: var(--radius-sm);">
         </span>
-        <span class="logo-text">长鑫杂货店</span>
+        <span class="logo-text">杂货店</span>
         <span class="logo-badge">PRO MAX</span>
       </h1>
     </div>
@@ -111,10 +111,10 @@
       <div class="welcome-screen" id="welcomeScreen">
         <div class="welcome-hero-glow"></div>
         <div class="welcome-store-badge">
-          <img src="assets/grocery-hero.jpg" alt="长鑫杂货店" class="welcome-hero-banner">
+          <img src="assets/grocery-hero.jpg" alt="杂货店" class="welcome-hero-banner">
         </div>
         <h2 id="welcomeTitle">开始对话</h2>
-        <p id="welcomeSub">长鑫杂货店 · 选择一个模型，输入你的问题开始交流</p>
+        <p id="welcomeSub">杂货店 · 选择一个模型，输入你的问题开始交流</p>
         <div class="welcome-suggestions">
           <button class="suggestion-chip" data-prompt="用中文通俗易懂地解释量子计算的基本原理、量子叠加态与量子纠缠">
             <div class="suggestion-chip-icon">💡</div>
@@ -259,12 +259,11 @@
 
           <div class="proxy-edit-section" style="margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border, #333);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px;">
-              <h4 style="margin: 0; font-size: 13px; font-weight: 600;">API 跨域代理网关 (可选)</h4>
-              <span style="font-size: 11px; color: var(--text-sub, #888);">免除浏览器跨域限制与 403 阻断</span>
+              <h4 style="margin: 0; font-size: 13px; font-weight: 600;">API 智能路由 & 跨域网关</h4>
+              <span style="font-size: 11px; color: var(--primary, #10a37f); font-weight: 500;">内置双通道自动容灾</span>
             </div>
-            <input type="text" id="settingProxyUrl" placeholder="如：https://api.yourdomain.com 或 Cloudflare Worker 地址（留空则同域自动代理）">
-            <p class="hint" style="margin-top: 4px; font-size: 11px; color: var(--text-sub, #888);">
-              配置后，所有跨域 API 请求自动经由该网关转发；部署在 Cloudflare Pages 时留空即可。
+            <p class="hint" style="margin-top: 4px; font-size: 11px; color: var(--text-sub, #888); line-height: 1.6;">
+              默认优先直连目标服务器；若遇浏览器跨域受限，系统将自动无缝切换至内置网关（默认: <code>api1.yulucha.xyz</code>，备用: <code>shrill-hat-47ef.a1361470438.workers.dev</code>），无需手动配置。
             </p>
           </div>
         </div>

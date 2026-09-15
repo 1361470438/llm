@@ -2127,18 +2127,15 @@ async function streamApiResponse() {
     }
   }
 
-  var apiReq = prepareApiRequest(endpoint, {
+  var reqHeaders = {
     'Content-Type': 'application/json',
     'Authorization': 'Bearer ' + group.apiKey
-  });
+  };
 
   try {
-    var res = await fetch(apiReq.url, {
-      method: 'POST',
-      headers: apiReq.headers,
-      body: JSON.stringify(body),
-      signal: state.abortController.signal,
-    });
+    var reqResult = await executeSmartApiRequest(endpoint, reqHeaders, body, state.abortController.signal);
+    var res = reqResult.res;
+    var activeRoute = reqResult.route;
 
     // 400 兼容降级重试：
     // 1. 部分网关不识别 stream_options
@@ -2160,12 +2157,9 @@ async function streamApiResponse() {
         bodyChanged = true;
       }
       if (bodyChanged) {
-        res = await fetch(apiReq.url, {
-          method: 'POST',
-          headers: apiReq.headers,
-          body: JSON.stringify(body),
-          signal: state.abortController.signal,
-        });
+        var retryResult = await executeSmartApiRequest(endpoint, reqHeaders, body, state.abortController.signal, activeRoute);
+        res = retryResult.res;
+        activeRoute = retryResult.route;
       }
     }
 
@@ -2177,21 +2171,13 @@ async function streamApiResponse() {
         var fallbackBody = fallbackProto === 'responses'
           ? buildResponsesBody(state.currentMessages, model, true)
           : buildBody(state.currentMessages, model, true);
-        var fallbackReq = prepareApiRequest(fallbackEndpoint, {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ' + group.apiKey
-        });
-        var fallbackRes = await fetch(fallbackReq.url, {
-          method: 'POST',
-          headers: fallbackReq.headers,
-          body: JSON.stringify(fallbackBody),
-          signal: state.abortController.signal,
-        });
+        var fallbackResult = await executeSmartApiRequest(fallbackEndpoint, reqHeaders, fallbackBody, state.abortController.signal, activeRoute);
+        var fallbackRes = fallbackResult.res;
         if (fallbackRes.ok) {
           res = fallbackRes;
           activeProtocol = fallbackProto;
           endpoint = fallbackEndpoint;
-          apiReq = fallbackReq;
+          activeRoute = fallbackResult.route;
         }
       }
     }
@@ -2311,7 +2297,7 @@ async function streamApiResponse() {
     } else {
       var errMsg = e.message || '网络连接异常';
       if (errMsg.indexOf('Failed to fetch') !== -1 || e.name === 'TypeError') {
-        errMsg = '网络连接失败 / 跨域受阻（请检查安全浏览器外网权限或 API Base 代理配置）';
+        errMsg = '网络连接失败 / 跨域代理转发受阻（已尝试默认与备用代理网关）';
       }
       showToast('请求失败: ' + errMsg + suffix, 'error');
     }
@@ -2703,54 +2689,115 @@ function resolveApiEndpoint(apiBase, protocol) {
   }
 }
 
-// 智能代理决策：跨域外部 API 自动通过代理网关中转，彻底免除浏览器 CORS 与 OPTIONS 403 阻断
-function prepareApiRequest(targetEndpoint, headers) {
-  var s = typeof getSettings === 'function' ? getSettings() : {};
-  var customProxy = (s.proxyUrl || '').trim().replace(/\/+$/, '');
-  var isWeb = typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http');
+// 统一内置跨域代理网关：默认主网关 + 容灾备用网关
+var PROXY_GATEWAYS = [
+  'https://api1.yulucha.xyz/api/proxy',
+  'https://shrill-hat-47ef.a1361470438.workers.dev/api/proxy'
+];
 
-  // 1. 如果用户在设置中配置了独立的 Worker 代理网关（如 https://api.yourdomain.com 或 Cloudflare Worker 域名）
-  if (customProxy && /^https?:\/\//i.test(customProxy)) {
+/**
+ * 遍历代理网关发起请求，支持主备自动无缝容灾（调度过程中静默不报错）
+ */
+async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gateways, originalError) {
+  var lastError = originalError || new Error('所有代理网关均不可用');
+
+  for (var i = 0; i < gateways.length; i++) {
+    var gatewayUrl = gateways[i];
+    var proxyHeaders = Object.assign({}, headers);
+    proxyHeaders['x-target-url'] = targetEndpoint;
+
     try {
-      var uTarget1 = new URL(targetEndpoint);
-      // 本地服务（如 Ollama）直接直连，不走代理
-      if (uTarget1.hostname !== 'localhost' && uTarget1.hostname !== '127.0.0.1') {
-        var reqHeaders1 = Object.assign({}, headers);
-        reqHeaders1['x-target-url'] = targetEndpoint;
-        var proxyUrl = customProxy.endsWith('/api/proxy') ? customProxy : (customProxy + '/api/proxy');
-        return {
-          url: proxyUrl,
-          headers: reqHeaders1,
-          isProxied: true
-        };
+      var proxyRes = await fetch(gatewayUrl, {
+        method: 'POST',
+        headers: proxyHeaders,
+        body: bodyStr,
+        signal: signal
+      });
+
+      // 若网关自身发生 502/503/504 错误且仍有备用网关，则静默尝试下一备用网关
+      if (!proxyRes.ok && (proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504) && i < gateways.length - 1) {
+        console.warn('代理网关 ' + gatewayUrl + ' 返回 ' + proxyRes.status + '，正在无缝切换备用网关...');
+        continue;
       }
-    } catch (_) {}
+
+      // 网关正常响应（包含 200 或上游业务返回的 400/401/403/429 等状态码）
+      return { res: proxyRes, route: gatewayUrl };
+    } catch (proxyErr) {
+      if ((signal && signal.aborted) || proxyErr.name === 'AbortError') throw proxyErr;
+
+      lastError = proxyErr;
+      console.warn('代理网关 ' + gatewayUrl + ' 连接异常，尝试下一个网关...', proxyErr);
+    }
   }
 
-  // 2. 如果未配置自定义代理网关，但当前运行在 Web 环境 (如 Cloudflare Pages) 下
-  if (isWeb && /^https?:\/\//i.test(targetEndpoint)) {
-    try {
-      var uTarget2 = new URL(targetEndpoint);
-      // 如果目标域名与当前页面域名不同，且不是本地服务，自动通过当前站点的同域 /api/proxy 中转
-      if (uTarget2.origin !== window.location.origin && uTarget2.hostname !== 'localhost' && uTarget2.hostname !== '127.0.0.1') {
-        var reqHeaders2 = Object.assign({}, headers);
-        reqHeaders2['x-target-url'] = targetEndpoint;
-        return {
-          url: '/api/proxy',
-          headers: reqHeaders2,
-          isProxied: true
-        };
-      }
-    } catch (_) {}
-  }
-
-  // 3. 目标与当前页面同源、或是相对路径、或是本地服务，直接发起请求
-  return {
-    url: targetEndpoint,
-    headers: headers,
-    isProxied: false
-  };
+  // 跨域再出问题再报错：所有代理通道均失败
+  throw lastError;
 }
+
+/**
+ * 智能 API 请求调度：
+ * 1. 用户发送信息，先直接向目标服务器发起请求，不进行后端转发；
+ * 2. 如果出现跨域问题（CORS 报错 / Preflight 阻断 / WAF 403 页面），自动转发后端；
+ * 3. 过程中自动路由不报错（默认 api1.yulucha.xyz，备用 shrill-hat-47ef.a1361470438.workers.dev）；
+ * 4. 跨域再出问题再报错（仅在所有代理网关均不可用时抛出异常）。
+ */
+async function executeSmartApiRequest(targetEndpoint, headers, body, signal, preferredRoute) {
+  var bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+
+  // 1. 本地服务（localhost / 127.0.0.1）直接直连，不可通过远程云端代理
+  var isLocal = false;
+  try {
+    var u = new URL(targetEndpoint);
+    if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
+      isLocal = true;
+    }
+  } catch (_) {}
+
+  if (isLocal) {
+    var localRes = await fetch(targetEndpoint, {
+      method: 'POST',
+      headers: headers,
+      body: bodyStr,
+      signal: signal
+    });
+    return { res: localRes, route: 'direct' };
+  }
+
+  // 2. 如果指定了已验证的生效代理路由（如 400 降级重试），优先走该通道
+  if (preferredRoute && preferredRoute !== 'direct') {
+    var gateways = [preferredRoute].concat(
+      PROXY_GATEWAYS.filter(function (g) { return g !== preferredRoute; })
+    );
+    return await tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gateways);
+  }
+
+  // 3. 用户发送信息，先直接向目标服务器发起请求，不进行后端转发
+  try {
+    var directRes = await fetch(targetEndpoint, {
+      method: 'POST',
+      headers: headers,
+      body: bodyStr,
+      signal: signal
+    });
+
+    // 检查是否遇到目标服务器 WAF 阻断网页（例如 Cloudflare 403 HTML 质询），若是则转入代理
+    var contentType = (directRes.headers.get('content-type') || '').toLowerCase();
+    if (directRes.status === 403 && contentType.indexOf('text/html') !== -1) {
+      console.warn('直连目标服务器返回 403 HTML 网页，自动切换至内置代理网关...');
+      return await tryProxyGateways(targetEndpoint, headers, bodyStr, signal, PROXY_GATEWAYS);
+    }
+
+    return { res: directRes, route: 'direct' };
+  } catch (directErr) {
+    // 若用户主动停止生成（AbortError），直接抛出，不触发代理
+    if ((signal && signal.aborted) || directErr.name === 'AbortError') throw directErr;
+
+    // 出现跨域问题（如 TypeError: Failed to fetch 或连接受阻），静默转交后端代理
+    console.warn('直连目标服务器失败（跨域受限），正在自动无缝切换至内置网关...', directErr);
+    return await tryProxyGateways(targetEndpoint, headers, bodyStr, signal, PROXY_GATEWAYS, directErr);
+  }
+}
+
 
 function buildResponsesBody(messages, model, stream) {
   var active = getActiveMessages(messages);
