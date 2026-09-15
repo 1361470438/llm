@@ -735,8 +735,8 @@ function preloadTopConversations() {
         var m = msgs[j];
         if (m && !m._cachedHtml && m.role === 'assistant' && m.text) {
           try {
-            m._cachedHtml = renderMarkdown(m.text);
-            if (m.reasoning) m._cachedReasoningHtml = renderMarkdown(m.reasoning);
+            m._cachedHtml = renderMd(m.text);
+            if (m.reasoning) m._cachedReasoningHtml = renderMd(m.reasoning);
           } catch (e) {}
         }
       }
