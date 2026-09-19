@@ -125,6 +125,14 @@ const dom = {
   btnDeleteConfirmClose: $('#btnDeleteConfirmClose'),
   btnDeleteConfirmCancel: $('#btnDeleteConfirmCancel'),
   btnDeleteConfirmOk: $('#btnDeleteConfirmOk'),
+  pdfViewerOverlay: $('#pdfViewerOverlay'),
+  pdfViewerTitle: $('#pdfViewerTitle'),
+  pdfViewerPageBadge: $('#pdfViewerPageBadge'),
+  pdfViewerImg: $('#pdfViewerImg'),
+  pdfViewerThumbnails: $('#pdfViewerThumbnails'),
+  btnPdfViewerPrev: $('#btnPdfViewerPrev'),
+  btnPdfViewerNext: $('#btnPdfViewerNext'),
+  btnPdfViewerClose: $('#btnPdfViewerClose'),
   renameConvoOverlay: $('#renameConvoOverlay'),
   renameConvoInput: $('#renameConvoInput'),
   btnRenameConvoClose: $('#btnRenameConvoClose'),
@@ -571,7 +579,8 @@ function esc(str) {
 function fmtTokens(n) { return n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(n); }
 
 // ─── File and attachment helpers ───────────────────────────────
-var MAX_FILE_SIZE = 12 * 1024 * 1024;
+var MAX_FILE_SIZE = 60 * 1024 * 1024;
+var MAX_PDF_RENDER_PAGES = 50;
 var MAX_TOTAL_FILE_TEXT = 240000;
 var TEXT_EXTENSIONS = /\.(txt|md|markdown|csv|tsv|json|xml|html?|css|js|ts|jsx|tsx|py|java|c|h|cpp|hpp|cs|go|rs|php|rb|swift|kt|kts|sql|ya?ml|toml|ini|conf|log|rtf)$/i;
 var ARCHIVE_EXTENSIONS = /\.(docx|xlsx|xlsm|pptx)$/i;
@@ -669,8 +678,8 @@ function ensurePdfJs() {
   return pdfJsPromise;
 }
 
-// 纯前端将 PDF 的每一页光栅化为高清大图（1400px 宽度，确保电路图与波形图纤毫毕现）
-async function renderPdfToPageImages(file, buffer) {
+// 纯前端将 PDF 分页光栅化为高清大图（1200px 宽度，确保电路图与波形图纤毫毕现同时严格控制体积）
+async function renderPdfToPageImages(file, buffer, onProgress) {
   var pdfjs = await ensurePdfJs();
   var loadingTask = pdfjs.getDocument({
     data: new Uint8Array(buffer),
@@ -679,15 +688,15 @@ async function renderPdfToPageImages(file, buffer) {
   });
   var pdf = await loadingTask.promise;
   var totalPages = pdf.numPages;
-  var maxPagesToRender = Math.min(totalPages, 12);
+  var maxPagesToRender = Math.min(totalPages, MAX_PDF_RENDER_PAGES);
   var pages = [];
   var fullText = [];
 
   for (var i = 1; i <= maxPagesToRender; i++) {
     var page = await pdf.getPage(i);
     var viewport = page.getViewport({ scale: 1.0 });
-    // 为确保电路图引脚、波形图坐标与文字清晰，按 1400px 基准宽度缩放
-    var scale = Math.min(2.5, Math.max(1.2, 1400 / viewport.width));
+    // 为确保电路图引脚、波形图坐标清晰且控制 Base64 体积，采用 1200px 基准宽度
+    var scale = Math.min(2.2, Math.max(1.0, 1200 / viewport.width));
     viewport = page.getViewport({ scale: scale });
 
     var canvas = document.createElement('canvas');
@@ -698,7 +707,7 @@ async function renderPdfToPageImages(file, buffer) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-    var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+    var dataUrl = canvas.toDataURL('image/jpeg', 0.78);
 
     var pageText = '';
     try {
@@ -714,6 +723,19 @@ async function renderPdfToPageImages(file, buffer) {
       text: pageText
     });
     if (pageText) fullText.push('--- 第 ' + i + ' 页 ---\n' + pageText);
+    if (typeof onProgress === 'function') onProgress(i, maxPagesToRender, totalPages);
+  }
+
+  // 若文档总页数超过光栅化上限，全量抽取后续页面的结构化文本，保证文献不遗漏任何正文内容
+  if (totalPages > maxPagesToRender) {
+    for (var j = maxPagesToRender + 1; j <= totalPages; j++) {
+      try {
+        var extraPage = await pdf.getPage(j);
+        var extraTc = await extraPage.getTextContent();
+        var extraPt = extraTc.items.map(function (item) { return item.str; }).join(' ').trim();
+        if (extraPt) fullText.push('--- 第 ' + j + ' 页 ---\n' + extraPt);
+      } catch (_) {}
+    }
   }
 
   return {
@@ -746,7 +768,16 @@ async function parseAttachment(file) {
   if (isPdf) {
     try {
       var pdfRes = await renderPdfToPageImages(file, buffer);
-      text = pdfRes.extractedText || '';
+      return {
+        name: file.name,
+        type: 'application/pdf',
+        size: file.size,
+        text: pdfRes.extractedText || '',
+        pageCount: pdfRes.totalPages,
+        renderedPageCount: pdfRes.renderedPages ? pdfRes.renderedPages.length : 0,
+        pages: pdfRes.renderedPages || [],
+        isPdf: true
+      };
     } catch (_) {
       text = '';
     }
@@ -787,7 +818,7 @@ async function addFiles(files) {
     }
 
     if (file.size > MAX_FILE_SIZE) {
-      showToast(file.name + ' 超过 12 MB 限制', 'error');
+      showToast(file.name + ' 超过 ' + formatFileSize(MAX_FILE_SIZE) + ' 限制', 'error');
       continue;
     }
 
@@ -798,35 +829,36 @@ async function addFiles(files) {
         showToast('最多上传 10 个文件', 'error');
         continue;
       }
-      showToast('正在解析 ' + file.name + ' 并光栅化为多模态高清图...', 'info');
+      showToast('正在解析 ' + file.name + '，请稍候...', 'info');
       try {
         var buffer = await readFileBuffer(file);
-        var pdfResult = await renderPdfToPageImages(file, buffer);
+        var lastToastTime = 0;
+        var pdfResult = await renderPdfToPageImages(file, buffer, function (curr, total, docTotal) {
+          var now = Date.now();
+          if (now - lastToastTime > 1200 || curr === total) {
+            lastToastTime = now;
+            showToast('正在光栅化 ' + file.name + ' (' + curr + '/' + total + ' 页)...', 'info');
+          }
+        });
         var renderedPages = pdfResult.renderedPages || [];
 
-        // 将渲染出的各页高清图片加入 pendingImages，让大模型通过视觉多模态直接阅读电路与波形图
-        var addedImagesCount = 0;
-        for (var p = 0; p < renderedPages.length; p++) {
-          if (state.pendingImages.length < MAX_PENDING_IMAGES) {
-            state.pendingImages.push(renderedPages[p].dataUrl);
-            addedImagesCount++;
-          }
-        }
-
-        // 同时将结构化文件信息保存至 pendingFiles
+        // 页面图像直接保存在 PDF 文件对象内部，不在输入框弹出大量散落图片！
         state.pendingFiles.push({
           name: file.name,
           type: 'application/pdf',
           size: file.size,
           text: pdfResult.extractedText || '',
           pageCount: pdfResult.totalPages,
-          renderedPageCount: addedImagesCount,
+          renderedPageCount: renderedPages.length,
+          pages: renderedPages,
           isPdf: true
         });
 
         renderAttachmentPreviews();
-        var extraNote = pdfResult.totalPages > addedImagesCount ? ('（已渲染前 ' + addedImagesCount + ' 页）') : '';
-        showToast('已成功将 ' + file.name + ' 光栅化为 ' + addedImagesCount + ' 页高清图' + extraNote + '，波形图与电路图已就绪！', 'success');
+        var extraNote = pdfResult.totalPages > renderedPages.length
+          ? ('（已光栅化前 ' + renderedPages.length + ' 页视觉图，已抽取全部 ' + pdfResult.totalPages + ' 页文本）')
+          : ('（共 ' + renderedPages.length + ' 页）');
+        showToast('已解析 ' + file.name + extraNote + '，波形与电路图已就绪！', 'success');
       } catch (pdfErr) {
         console.warn('PDF 光栅化失败，降级为普通文件附件处理:', pdfErr);
         try {
@@ -865,13 +897,16 @@ function renderAttachmentPreviews() {
     var isPdf = f.isPdf || (f.type === 'application/pdf') || /\.pdf$/i.test(f.name);
     var iconClass = isPdf ? 'file-preview-icon file-icon-pdf' : 'file-preview-icon';
     var iconText = isPdf ? 'PDF' : '▧';
-    var badgeHtml = isPdf ? ('<span class="file-preview-badge" title="大模型原生视觉阅读">' + (f.renderedPageCount ? ('已栅格化 ' + f.renderedPageCount + ' 页') : '多模态') + '</span>') : '';
+    var count = f.renderedPageCount || (f.pages ? f.pages.length : 0);
+    var badgeHtml = isPdf ? ('<span class="file-preview-badge" title="大模型原生视觉阅读">' + (count ? ('共 ' + count + ' 页') : '多模态') + '</span>') : '';
+    var previewBtnHtml = (isPdf && f.pages && f.pages.length) ? ('<button class="btn-file-preview-action" type="button" data-preview-file-index="' + i + '" title="预览页面与图表">👁 预览</button>') : '';
     return '<div class="file-preview-item' + (isPdf ? ' is-pdf' : '') + '">' +
       '<span class="' + iconClass + '">' + iconText + '</span>' +
       '<span class="file-preview-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span>' +
       badgeHtml +
       '<span class="file-preview-size">' + formatFileSize(f.size) + '</span>' +
-      '<button class="file-preview-remove" data-kind="file" data-index="' + i + '">×</button>' +
+      previewBtnHtml +
+      '<button class="file-preview-remove" data-kind="file" data-index="' + i + '" title="移除文件">×</button>' +
     '</div>';
   }).join('');
   dom.attachmentPreviews.innerHTML = html;
@@ -880,6 +915,16 @@ function renderAttachmentPreviews() {
     imgEl.addEventListener('click', function () {
       dom.imageOverlayImg.src = this.src;
       dom.imageOverlay.classList.add('active');
+    });
+  });
+  dom.attachmentPreviews.querySelectorAll('.btn-file-preview-action').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      var fIndex = parseInt(this.dataset.previewFileIndex, 10);
+      var f = state.pendingFiles[fIndex];
+      if (f && f.pages && f.pages.length) {
+        openPdfViewer(f);
+      }
     });
   });
   dom.attachmentPreviews.querySelectorAll('.image-preview-remove, .file-preview-remove').forEach(function (btn) {
@@ -1637,16 +1682,19 @@ function createBubbleElement(msg, idx) {
   }
   var filesHtml = '';
   if (msg.files && msg.files.length) {
-    filesHtml = '<div class="message-files">' + msg.files.map(function (f) {
+    filesHtml = '<div class="message-files">' + msg.files.map(function (f, fIdx) {
       var isPdf = f.isPdf || (f.type === 'application/pdf') || /\.pdf$/i.test(f.name);
       var iconClass = isPdf ? 'message-file-icon file-icon-pdf' : 'message-file-icon';
       var iconText = isPdf ? 'PDF' : '▧';
-      var badgeHtml = isPdf ? '<span class="message-file-badge">PDF 原生直传</span>' : '';
+      var pageCount = f.renderedPageCount || (f.pages ? f.pages.length : 0);
+      var badgeHtml = isPdf ? ('<span class="message-file-badge">' + (pageCount ? ('共 ' + pageCount + ' 页') : 'PDF 文档') + '</span>') : '';
+      var previewBtnHtml = (isPdf && f.pages && f.pages.length) ? ('<button class="btn-file-preview-action" type="button" data-msg-idx="' + (typeof idx === 'number' ? idx : '') + '" data-file-idx="' + fIdx + '" title="预览页面与图表">👁 预览</button>') : '';
       return '<div class="message-file' + (isPdf ? ' is-pdf' : '') + '" title="' + esc(f.name) + '">' +
         '<span class="' + iconClass + '">' + iconText + '</span>' +
         '<span class="message-file-name">' + esc(f.name) + '</span>' +
         badgeHtml +
         '<span class="file-preview-size">' + formatFileSize(f.size || 0) + '</span>' +
+        previewBtnHtml +
       '</div>';
     }).join('') + '</div>';
   }
@@ -2883,7 +2931,14 @@ function buildBody(messages, model, stream) {
       if (m.files && m.files.length) {
         for (var f = 0; f < m.files.length; f++) {
           var file = m.files[f];
-          if (file.isPdf && file.renderedPageCount) {
+          if (file.isPdf && file.pages && file.pages.length) {
+            for (var p = 0; p < file.pages.length; p++) {
+              content.push({ type: 'image_url', image_url: { url: file.pages[p].dataUrl, detail: 'auto' } });
+            }
+            if (file.text && file.text.trim()) {
+              content.push({ type: 'text', text: '\n\n【附件：' + file.name + ' 参考文本】\n' + file.text + '\n【附件结束】' });
+            }
+          } else if (file.isPdf && file.renderedPageCount) {
             if (file.text && file.text.trim()) {
               content.push({ type: 'text', text: '\n\n【附件：' + file.name + ' 参考文本】\n' + file.text + '\n【附件结束】' });
             }
@@ -3203,7 +3258,17 @@ function buildResponsesBody(messages, model, stream) {
       if (m.files && m.files.length) {
         for (var f = 0; f < m.files.length; f++) {
           var file = m.files[f];
-          if (file.isPdf && file.renderedPageCount) {
+          if (file.isPdf && file.pages && file.pages.length) {
+            for (var p = 0; p < file.pages.length; p++) {
+              contentParts.push({ type: 'input_image', image_url: file.pages[p].dataUrl });
+            }
+            if (file.text && file.text.trim()) {
+              contentParts.push({
+                type: 'input_text',
+                text: '\n\n【附件：' + file.name + ' 参考文本】\n' + file.text + '\n【附件结束】'
+              });
+            }
+          } else if (file.isPdf && file.renderedPageCount) {
             if (file.text && file.text.trim()) {
               contentParts.push({
                 type: 'input_text',
@@ -4585,7 +4650,121 @@ dom.fileInput.addEventListener('change', function (e) { addFiles(e.target.files)
 dom.btnImageOverlayClose.addEventListener('click', function () { dom.imageOverlay.classList.remove('active'); });
 dom.imageOverlay.addEventListener('click', function (e) { if (e.target === dom.imageOverlay) dom.imageOverlay.classList.remove('active'); });
 
+// ─── PDF Page Viewer ────────────────────────────────────────────
+var activePdfViewerFile = null;
+var activePdfViewerPageIndex = 0;
+
+function openPdfViewer(file, initialPageIndex) {
+  if (!file || !file.pages || !file.pages.length) return;
+  activePdfViewerFile = file;
+  activePdfViewerPageIndex = initialPageIndex || 0;
+  if (dom.pdfViewerTitle) dom.pdfViewerTitle.textContent = file.name || '文档页面预览';
+  renderPdfViewerPage();
+  renderPdfViewerThumbnails();
+  if (dom.pdfViewerOverlay) dom.pdfViewerOverlay.classList.add('active');
+}
+
+function closePdfViewer() {
+  if (dom.pdfViewerOverlay) dom.pdfViewerOverlay.classList.remove('active');
+  activePdfViewerFile = null;
+  activePdfViewerPageIndex = 0;
+}
+
+function renderPdfViewerPage() {
+  if (!activePdfViewerFile || !activePdfViewerFile.pages || !activePdfViewerFile.pages.length) return;
+  var pages = activePdfViewerFile.pages;
+  if (activePdfViewerPageIndex < 0) activePdfViewerPageIndex = 0;
+  if (activePdfViewerPageIndex >= pages.length) activePdfViewerPageIndex = pages.length - 1;
+  var curr = pages[activePdfViewerPageIndex];
+  if (dom.pdfViewerImg) dom.pdfViewerImg.src = curr.dataUrl;
+  var totalInfo = (activePdfViewerFile.pageCount && activePdfViewerFile.pageCount > pages.length)
+    ? (' (总计 ' + activePdfViewerFile.pageCount + ' 页，已渲染前 ' + pages.length + ' 页)')
+    : (' (共 ' + pages.length + ' 页)');
+  if (dom.pdfViewerPageBadge) dom.pdfViewerPageBadge.textContent = '第 ' + (activePdfViewerPageIndex + 1) + ' / ' + pages.length + ' 页' + totalInfo;
+  if (dom.btnPdfViewerPrev) dom.btnPdfViewerPrev.disabled = (activePdfViewerPageIndex <= 0);
+  if (dom.btnPdfViewerNext) dom.btnPdfViewerNext.disabled = (activePdfViewerPageIndex >= pages.length - 1);
+
+  var thumbs = dom.pdfViewerThumbnails ? dom.pdfViewerThumbnails.querySelectorAll('.pdf-thumb-item') : [];
+  thumbs.forEach(function (t, idx) {
+    if (idx === activePdfViewerPageIndex) {
+      t.classList.add('active');
+      t.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+    } else {
+      t.classList.remove('active');
+    }
+  });
+}
+
+function renderPdfViewerThumbnails() {
+  if (!activePdfViewerFile || !activePdfViewerFile.pages || !dom.pdfViewerThumbnails) return;
+  var pages = activePdfViewerFile.pages;
+  var html = pages.map(function (p, idx) {
+    return '<div class="pdf-thumb-item' + (idx === activePdfViewerPageIndex ? ' active' : '') + '" data-page-index="' + idx + '" title="第 ' + (idx + 1) + ' 页">' +
+      '<img src="' + esc(p.dataUrl) + '" alt="Page ' + (idx + 1) + '">' +
+      '<span class="thumb-num">' + (idx + 1) + '</span>' +
+    '</div>';
+  }).join('');
+  dom.pdfViewerThumbnails.innerHTML = html;
+  dom.pdfViewerThumbnails.querySelectorAll('.pdf-thumb-item').forEach(function (thumbEl) {
+    thumbEl.addEventListener('click', function () {
+      activePdfViewerPageIndex = parseInt(this.dataset.pageIndex, 10);
+      renderPdfViewerPage();
+    });
+  });
+}
+
+if (dom.btnPdfViewerPrev) {
+  dom.btnPdfViewerPrev.addEventListener('click', function () {
+    if (activePdfViewerPageIndex > 0) {
+      activePdfViewerPageIndex--;
+      renderPdfViewerPage();
+    }
+  });
+}
+
+if (dom.btnPdfViewerNext) {
+  dom.btnPdfViewerNext.addEventListener('click', function () {
+    if (activePdfViewerFile && activePdfViewerFile.pages && activePdfViewerPageIndex < activePdfViewerFile.pages.length - 1) {
+      activePdfViewerPageIndex++;
+      renderPdfViewerPage();
+    }
+  });
+}
+
+if (dom.btnPdfViewerClose) {
+  dom.btnPdfViewerClose.addEventListener('click', closePdfViewer);
+}
+
+if (dom.pdfViewerOverlay) {
+  dom.pdfViewerOverlay.addEventListener('click', function (e) {
+    if (e.target === dom.pdfViewerOverlay) closePdfViewer();
+  });
+}
+
 dom.messagesContainer.addEventListener('click', function (e) {
+  var previewFileBtn = e.target.closest('.btn-file-preview-action');
+  if (previewFileBtn) {
+    var pMsgIdx = parseInt(previewFileBtn.dataset.msgIdx, 10);
+    var pFileIdx = parseInt(previewFileBtn.dataset.fileIdx, 10);
+    var targetMsg = state.currentMessages[pMsgIdx];
+    if (targetMsg && targetMsg.files && targetMsg.files[pFileIdx]) {
+      openPdfViewer(targetMsg.files[pFileIdx]);
+    }
+    return;
+  }
+  var pdfCard = e.target.closest('.message-file.is-pdf');
+  if (pdfCard) {
+    var pBtn = pdfCard.querySelector('.btn-file-preview-action');
+    if (pBtn) {
+      var mIdx = parseInt(pBtn.dataset.msgIdx, 10);
+      var fIdx = parseInt(pBtn.dataset.fileIdx, 10);
+      var tMsg = state.currentMessages[mIdx];
+      if (tMsg && tMsg.files && tMsg.files[fIdx]) {
+        openPdfViewer(tMsg.files[fIdx]);
+      }
+      return;
+    }
+  }
   var copyBtn = e.target.closest('.message-copy-btn');
   if (copyBtn) { copyMessageFromBtn(copyBtn); return; }
 
@@ -4692,11 +4871,36 @@ document.addEventListener('dragover', function (e) { e.preventDefault(); });
 document.addEventListener('drop', function (e) { e.preventDefault(); });
 
 document.addEventListener('keydown', function (e) {
+  if (dom.pdfViewerOverlay && dom.pdfViewerOverlay.classList.contains('active')) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closePdfViewer();
+      return;
+    }
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      if (activePdfViewerPageIndex > 0) {
+        activePdfViewerPageIndex--;
+        renderPdfViewerPage();
+      }
+      return;
+    }
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      if (activePdfViewerFile && activePdfViewerFile.pages && activePdfViewerPageIndex < activePdfViewerFile.pages.length - 1) {
+        activePdfViewerPageIndex++;
+        renderPdfViewerPage();
+      }
+      return;
+    }
+  }
+
   if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
     e.preventDefault();
     // Ctrl+K 已从「聚焦输入框」改为「清除上下文」；设置/删除确认弹窗打开时不触发
     if (dom.settingsOverlay.classList.contains('active')) return;
     if (dom.deleteConfirmOverlay.classList.contains('active')) return;
+    if (dom.pdfViewerOverlay && dom.pdfViewerOverlay.classList.contains('active')) return;
     setContextBreak();
   }
 });
