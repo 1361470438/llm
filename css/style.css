@@ -1703,7 +1703,7 @@ select:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 300px;
+  max-width: 320px;
   padding: 8px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -1712,8 +1712,9 @@ select:focus-visible {
   font-size: 12px;
 }
 
-.message-file-icon { color: var(--accent-light); font-size: 14px; }
-.message-file-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-file-icon { color: var(--accent-light); font-size: 14px; flex-shrink: 0; }
+.message-file-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.message-file-badge { flex-shrink: 0; white-space: nowrap; }
 
 /* Edit Textarea */
 .edit-textarea {
@@ -2002,7 +2003,7 @@ select:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  max-width: 260px;
+  max-width: 340px;
   padding: 7px 28px 7px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
@@ -2011,9 +2012,9 @@ select:focus-visible {
   font-size: 12px;
 }
 
-.file-preview-icon { color: var(--accent-light); font-size: 15px; }
-.file-preview-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.file-preview-size { color: var(--text-muted); white-space: nowrap; }
+.file-preview-icon { color: var(--accent-light); font-size: 15px; flex-shrink: 0; }
+.file-preview-name { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-preview-size { color: var(--text-muted); white-space: nowrap; flex-shrink: 0; }
 
 .file-preview-remove {
   position: absolute;
@@ -2039,6 +2040,8 @@ select:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   background: #ff4d4f;
   color: #fff !important;
   font-size: 9px !important;
@@ -2051,6 +2054,8 @@ select:focus-visible {
 .file-preview-badge {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
+  white-space: nowrap;
   background: rgba(255, 77, 79, 0.18);
   color: #ff7875;
   border: 1px solid rgba(255, 77, 79, 0.3);
@@ -2058,7 +2063,6 @@ select:focus-visible {
   padding: 1px 5px;
   border-radius: 10px;
   font-weight: 500;
-  white-space: nowrap;
 }
 .message-file.is-pdf {
   border-color: rgba(255, 77, 79, 0.35);
