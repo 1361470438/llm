@@ -678,7 +678,24 @@ function ensurePdfJs() {
   return pdfJsPromise;
 }
 
-// 纯前端将 PDF 分页光栅化为高清大图（1200px 宽度，确保电路图与波形图纤毫毕现同时严格控制体积）
+// 阶梯式自适应画质配置：根据页数动态权衡最佳画质与数据体积
+function getPdfRenderProfile(pagesCount) {
+  if (pagesCount <= 8) {
+    // 8 页以内（短篇论文、实验报告、快报）：极致超清，电路引脚与微小波形纤毫毕现
+    return { targetWidth: 1600, quality: 0.88, maxScale: 2.8, label: '超清' };
+  } else if (pagesCount <= 16) {
+    // 9 ~ 16 页（常规会议/期刊全文）：高清呈现，兼顾极速与细节
+    return { targetWidth: 1380, quality: 0.82, maxScale: 2.4, label: '高清' };
+  } else if (pagesCount <= 30) {
+    // 17 ~ 30 页（长篇文献/芯片数据手册）：均衡画质，严格控制总体积
+    return { targetWidth: 1150, quality: 0.76, maxScale: 2.0, label: '均衡' };
+  } else {
+    // 31 ~ 50 页（超长技术规格书/白皮书）：轻量流畅，确保穿透网关与请求限制
+    return { targetWidth: 960, quality: 0.70, maxScale: 1.8, label: '轻量' };
+  }
+}
+
+// 纯前端将 PDF 分页光栅化为多模态大图（根据页数自适应阶梯分辨率与画质）
 async function renderPdfToPageImages(file, buffer, onProgress) {
   var pdfjs = await ensurePdfJs();
   var loadingTask = pdfjs.getDocument({
@@ -689,14 +706,15 @@ async function renderPdfToPageImages(file, buffer, onProgress) {
   var pdf = await loadingTask.promise;
   var totalPages = pdf.numPages;
   var maxPagesToRender = Math.min(totalPages, MAX_PDF_RENDER_PAGES);
+  var profile = getPdfRenderProfile(maxPagesToRender);
   var pages = [];
   var fullText = [];
 
   for (var i = 1; i <= maxPagesToRender; i++) {
     var page = await pdf.getPage(i);
     var viewport = page.getViewport({ scale: 1.0 });
-    // 为确保电路图引脚、波形图坐标清晰且控制 Base64 体积，采用 1200px 基准宽度
-    var scale = Math.min(2.2, Math.max(1.0, 1200 / viewport.width));
+    // 根据自适应画质配置动态计算最适合的 Canvas 缩放比
+    var scale = Math.min(profile.maxScale, Math.max(0.85, profile.targetWidth / viewport.width));
     viewport = page.getViewport({ scale: scale });
 
     var canvas = document.createElement('canvas');
@@ -707,7 +725,7 @@ async function renderPdfToPageImages(file, buffer, onProgress) {
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     await page.render({ canvasContext: ctx, viewport: viewport }).promise;
-    var dataUrl = canvas.toDataURL('image/jpeg', 0.78);
+    var dataUrl = canvas.toDataURL('image/jpeg', profile.quality);
 
     var pageText = '';
     try {
@@ -741,7 +759,8 @@ async function renderPdfToPageImages(file, buffer, onProgress) {
   return {
     totalPages: totalPages,
     renderedPages: pages,
-    extractedText: fullText.join('\n\n')
+    extractedText: fullText.join('\n\n'),
+    profileLabel: profile.label
   };
 }
 
@@ -776,6 +795,7 @@ async function parseAttachment(file) {
         pageCount: pdfRes.totalPages,
         renderedPageCount: pdfRes.renderedPages ? pdfRes.renderedPages.length : 0,
         pages: pdfRes.renderedPages || [],
+        profileLabel: pdfRes.profileLabel || '',
         isPdf: true
       };
     } catch (_) {
@@ -851,13 +871,15 @@ async function addFiles(files) {
           pageCount: pdfResult.totalPages,
           renderedPageCount: renderedPages.length,
           pages: renderedPages,
+          profileLabel: pdfResult.profileLabel || '',
           isPdf: true
         });
 
         renderAttachmentPreviews();
+        var pLabel = pdfResult.profileLabel ? (' · ' + pdfResult.profileLabel) : '';
         var extraNote = pdfResult.totalPages > renderedPages.length
-          ? ('（已光栅化前 ' + renderedPages.length + ' 页视觉图，已抽取全部 ' + pdfResult.totalPages + ' 页文本）')
-          : ('（共 ' + renderedPages.length + ' 页）');
+          ? ('（已按' + (pdfResult.profileLabel || '高清') + '画质光栅化前 ' + renderedPages.length + ' 页视觉图，已抽取全部 ' + pdfResult.totalPages + ' 页文本）')
+          : ('（共 ' + renderedPages.length + ' 页' + pLabel + '）');
         showToast('已解析 ' + file.name + extraNote + '，波形与电路图已就绪！', 'success');
       } catch (pdfErr) {
         console.warn('PDF 光栅化失败，降级为普通文件附件处理:', pdfErr);
@@ -898,7 +920,8 @@ function renderAttachmentPreviews() {
     var iconClass = isPdf ? 'file-preview-icon file-icon-pdf' : 'file-preview-icon';
     var iconText = isPdf ? 'PDF' : '▧';
     var count = f.renderedPageCount || (f.pages ? f.pages.length : 0);
-    var badgeHtml = isPdf ? ('<span class="file-preview-badge" title="大模型原生视觉阅读">' + (count ? ('共 ' + count + ' 页') : '多模态') + '</span>') : '';
+    var badgeText = count ? ('共 ' + count + ' 页' + (f.profileLabel ? (' · ' + f.profileLabel) : '')) : '多模态';
+    var badgeHtml = isPdf ? ('<span class="file-preview-badge" title="大模型原生视觉阅读">' + badgeText + '</span>') : '';
     var previewBtnHtml = (isPdf && f.pages && f.pages.length) ? ('<button class="btn-file-preview-action" type="button" data-preview-file-index="' + i + '" title="预览页面与图表">👁 预览</button>') : '';
     return '<div class="file-preview-item' + (isPdf ? ' is-pdf' : '') + '">' +
       '<span class="' + iconClass + '">' + iconText + '</span>' +
@@ -1687,7 +1710,8 @@ function createBubbleElement(msg, idx) {
       var iconClass = isPdf ? 'message-file-icon file-icon-pdf' : 'message-file-icon';
       var iconText = isPdf ? 'PDF' : '▧';
       var pageCount = f.renderedPageCount || (f.pages ? f.pages.length : 0);
-      var badgeHtml = isPdf ? ('<span class="message-file-badge">' + (pageCount ? ('共 ' + pageCount + ' 页') : 'PDF 文档') + '</span>') : '';
+      var badgeText = pageCount ? ('共 ' + pageCount + ' 页' + (f.profileLabel ? (' · ' + f.profileLabel) : '')) : 'PDF 文档';
+      var badgeHtml = isPdf ? ('<span class="message-file-badge">' + badgeText + '</span>') : '';
       var previewBtnHtml = (isPdf && f.pages && f.pages.length) ? ('<button class="btn-file-preview-action" type="button" data-msg-idx="' + (typeof idx === 'number' ? idx : '') + '" data-file-idx="' + fIdx + '" title="预览页面与图表">👁 预览</button>') : '';
       return '<div class="message-file' + (isPdf ? ' is-pdf' : '') + '" title="' + esc(f.name) + '">' +
         '<span class="' + iconClass + '">' + iconText + '</span>' +
@@ -4680,7 +4704,8 @@ function renderPdfViewerPage() {
   var totalInfo = (activePdfViewerFile.pageCount && activePdfViewerFile.pageCount > pages.length)
     ? (' (总计 ' + activePdfViewerFile.pageCount + ' 页，已渲染前 ' + pages.length + ' 页)')
     : (' (共 ' + pages.length + ' 页)');
-  if (dom.pdfViewerPageBadge) dom.pdfViewerPageBadge.textContent = '第 ' + (activePdfViewerPageIndex + 1) + ' / ' + pages.length + ' 页' + totalInfo;
+  var profileInfo = activePdfViewerFile.profileLabel ? (' · ' + activePdfViewerFile.profileLabel) : '';
+  if (dom.pdfViewerPageBadge) dom.pdfViewerPageBadge.textContent = '第 ' + (activePdfViewerPageIndex + 1) + ' / ' + pages.length + ' 页' + profileInfo + totalInfo;
   if (dom.btnPdfViewerPrev) dom.btnPdfViewerPrev.disabled = (activePdfViewerPageIndex <= 0);
   if (dom.btnPdfViewerNext) dom.btnPdfViewerNext.disabled = (activePdfViewerPageIndex >= pages.length - 1);
 
