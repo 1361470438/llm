@@ -94,7 +94,6 @@ const dom = {
   settingGroupName: $('#settingGroupName'),
   settingGroupBase: $('#settingGroupBase'),
   settingGroupProtocol: $('#settingGroupProtocol'),
-  settingProxyUrl: $('#settingProxyUrl'),
   settingGroupKey: $('#settingGroupKey'),
   modelEditList: $('#modelEditList'),
   settingModelInput: $('#settingModelInput'),
@@ -3422,7 +3421,6 @@ function loadSettingsForm() {
   dom.settingFontSize.value = String((s.appearance || {}).fontSize || 14);
   dom.settingShowThinking.checked = !!s.showThinking;
   state.editingGroupId = s.activeGroupId;
-  if (dom.settingProxyUrl) dom.settingProxyUrl.value = s.proxyUrl || '';
   renderGroupTabs();
   loadGroupForm();
   renderModelEditList();
@@ -3604,7 +3602,6 @@ function saveSettingsForm() {
   var s = getSettings();
   s.appearance = { fontSize: parseInt(dom.settingFontSize.value, 10) || 14 };
   s.showThinking = dom.settingShowThinking.checked;
-  if (dom.settingProxyUrl) s.proxyUrl = dom.settingProxyUrl.value.trim().replace(/\/+$/, '');
   setSettings(s);
   applyFontSize();
   renderGroupSelector();
@@ -3837,7 +3834,6 @@ function getExportableSettings(includeApiKey) {
   flushGroupForm();
   flushConvoGroupForm();
   var s = getSettings();
-  if (dom.settingProxyUrl) s.proxyUrl = dom.settingProxyUrl.value.trim().replace(/\/+$/, '');
   if (dom.settingFontSize) s.appearance = { fontSize: parseInt(dom.settingFontSize.value, 10) || 14 };
   if (dom.settingShowThinking) s.showThinking = dom.settingShowThinking.checked;
 
