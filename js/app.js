@@ -487,11 +487,7 @@ function normalizeSettings(s) {
     g.apiProtocol = g.apiProtocol || 'auto';
     g.apiKey = g.apiKey || '';
     var oldDefaultJson = JSON.stringify(['gpt-5.6-sol', 'claude-opus-5', 'claude-fable-5', 'gemini-3.1-pro-preview', 'gemini-3.5-flash-lite', 'gemini-3.6-flash']);
-    var hasOldDefaultSignature = Array.isArray(g.models) && (
-      JSON.stringify(g.models) === oldDefaultJson ||
-      (g.models.indexOf('claude-fable-5') !== -1 && g.models.indexOf('gemini-3.5-flash-lite') !== -1)
-    );
-    if (hasOldDefaultSignature) {
+    if (Array.isArray(g.models) && JSON.stringify(g.models) === oldDefaultJson) {
       g.models = DEFAULT_MODELS.slice();
     } else {
       g.models = Array.isArray(g.models) ? dedupe(g.models) : DEFAULT_MODELS.slice();
