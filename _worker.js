@@ -61,6 +61,8 @@ export default {
               },
             }
           );
+        }
+
         if (targetUrl.protocol !== 'https:' && targetUrl.protocol !== 'http:') {
           return new Response(
             JSON.stringify({
