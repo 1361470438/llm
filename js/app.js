@@ -3,12 +3,10 @@
 // ─── Constants ───────────────────────────────────────────────────
 
 const DEFAULT_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.1-pro',
   'gpt-5.6-sol',
   'claude-opus-5',
-  'claude-fable-5',
-  'gemini-3.1-pro-preview',
-  'gemini-3.5-flash-lite',
-  'gemini-3.6-flash',
 ];
 
 const LS = {
@@ -487,7 +485,12 @@ function normalizeSettings(s) {
     g.apiBase = g.apiBase || 'https://api.openai.com/v1';
     g.apiProtocol = g.apiProtocol || 'auto';
     g.apiKey = g.apiKey || '';
-    g.models = Array.isArray(g.models) ? dedupe(g.models) : DEFAULT_MODELS.slice();
+    var oldDefaultJson = JSON.stringify(['gpt-5.6-sol', 'claude-opus-5', 'claude-fable-5', 'gemini-3.1-pro-preview', 'gemini-3.5-flash-lite', 'gemini-3.6-flash']);
+    if (Array.isArray(g.models) && JSON.stringify(g.models) === oldDefaultJson) {
+      g.models = DEFAULT_MODELS.slice();
+    } else {
+      g.models = Array.isArray(g.models) ? dedupe(g.models) : DEFAULT_MODELS.slice();
+    }
     return g;
   });
   if (!getGroupIn(s, s.activeGroupId)) s.activeGroupId = s.apiGroups[0].id;
