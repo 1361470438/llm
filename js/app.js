@@ -9,6 +9,8 @@ const DEFAULT_MODELS = [
   'claude-opus-5',
 ];
 
+const MAX_PENDING_IMAGES = 15;
+
 const LS = {
   settings: 'llm_chat_settings',
   convos: 'llm_chat_convos',       // 会话索引（不含 messages，轻量）
@@ -626,14 +628,101 @@ async function extractOfficeText(file, buffer) {
   }
   return clampFileText(chunks.join('\n\n'));
 }
-function extractPdfText(buffer) {
-  var raw = new TextDecoder('latin1').decode(buffer), out = [], block, re = /BT([\s\S]*?)ET/g;
-  while ((block = re.exec(raw))) {
-    var m, strings = /\((?:\\.|[^\)])*\)/g;
-    while ((m = strings.exec(block[1]))) out.push(m[0].slice(1, -1).replace(/\\([\\()])/g, '$1'));
+var pdfJsPromise = null;
+function ensurePdfJs() {
+  if (typeof window !== 'undefined' && window.pdfjsLib) return Promise.resolve(window.pdfjsLib);
+  if (!pdfJsPromise) {
+    pdfJsPromise = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'js/vendor/pdfjs/pdf.min.js';
+      s.onload = function () {
+        if (window.pdfjsLib) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'js/vendor/pdfjs/pdf.worker.min.js';
+          resolve(window.pdfjsLib);
+        } else {
+          pdfJsPromise = null;
+          reject(new Error('PDF.js 未正确初始化'));
+        }
+      };
+      s.onerror = function () {
+        // Fallback to CDN if local fails
+        var cdn = document.createElement('script');
+        cdn.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+        cdn.onload = function () {
+          if (window.pdfjsLib) {
+            window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            resolve(window.pdfjsLib);
+          } else {
+            pdfJsPromise = null;
+            reject(new Error('PDF 渲染组件初始化失败'));
+          }
+        };
+        cdn.onerror = function () {
+          pdfJsPromise = null;
+          reject(new Error('PDF 渲染组件加载失败，请检查网络'));
+        };
+        document.head.appendChild(cdn);
+      };
+      document.head.appendChild(s);
+    });
   }
-  return clampFileText(out.join(' '));
+  return pdfJsPromise;
 }
+
+// 纯前端将 PDF 的每一页光栅化为高清大图（1400px 宽度，确保电路图与波形图纤毫毕现）
+async function renderPdfToPageImages(file, buffer) {
+  var pdfjs = await ensurePdfJs();
+  var loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(buffer),
+    cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+    cMapPacked: true
+  });
+  var pdf = await loadingTask.promise;
+  var totalPages = pdf.numPages;
+  var maxPagesToRender = Math.min(totalPages, 12);
+  var pages = [];
+  var fullText = [];
+
+  for (var i = 1; i <= maxPagesToRender; i++) {
+    var page = await pdf.getPage(i);
+    var viewport = page.getViewport({ scale: 1.0 });
+    // 为确保电路图引脚、波形图坐标与文字清晰，按 1400px 基准宽度缩放
+    var scale = Math.min(2.5, Math.max(1.2, 1400 / viewport.width));
+    viewport = page.getViewport({ scale: scale });
+
+    var canvas = document.createElement('canvas');
+    canvas.width = viewport.width;
+    canvas.height = viewport.height;
+    var ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+    var dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+    var pageText = '';
+    try {
+      var textContent = await page.getTextContent();
+      pageText = textContent.items.map(function (item) { return item.str; }).join(' ').trim();
+    } catch (_) {}
+
+    pages.push({
+      pageNumber: i,
+      totalPages: totalPages,
+      name: file.name + ' (第 ' + i + ' 页)',
+      dataUrl: dataUrl,
+      text: pageText
+    });
+    if (pageText) fullText.push('--- 第 ' + i + ' 页 ---\n' + pageText);
+  }
+
+  return {
+    totalPages: totalPages,
+    renderedPages: pages,
+    extractedText: fullText.join('\n\n')
+  };
+}
+
 function extractLegacyOfficeText(buffer) {
   var bytes = new Uint8Array(buffer), out = [], ascii = '', utf16 = '';
   for (var i = 0; i < bytes.length; i++) {
@@ -648,18 +737,19 @@ function extractLegacyOfficeText(buffer) {
 }
 function readFileBuffer(file) { return new Promise(function (resolve, reject) { var r = new FileReader(); r.onload = function () { resolve(r.result); }; r.onerror = function () { reject(r.error || new Error('文件读取失败')); }; r.readAsArrayBuffer(file); }); }
 function readFileDataUrl(file) { return new Promise(function (resolve, reject) { var r = new FileReader(); r.onload = function () { resolve(r.result); }; r.onerror = function () { reject(r.error || new Error('文件读取失败')); }; r.readAsDataURL(file); }); }
+
 async function parseAttachment(file) {
   var ext = fileExtension(file.name), buffer = await readFileBuffer(file), text = '';
   var mime = String(file.type || '');
   var isPdf = (ext === 'pdf' || mime === 'application/pdf');
-  var base64 = null;
 
   if (isPdf) {
     try {
-      base64 = await readFileDataUrl(file);
-    } catch (_) {}
-    text = extractPdfText(buffer);
-    if (!text) text = '（原生 PDF 文档，包含多模态排版/图表，已转为 Base64 原生直传）';
+      var pdfRes = await renderPdfToPageImages(file, buffer);
+      text = pdfRes.extractedText || '';
+    } catch (_) {
+      text = '';
+    }
   } else if (TEXT_EXTENSIONS.test(file.name) || mime.indexOf('text/') === 0 || mime === 'application/json') {
     text = clampFileText(decodeUtf8(buffer));
   } else if (ARCHIVE_EXTENSIONS.test(file.name)) {
@@ -668,7 +758,7 @@ async function parseAttachment(file) {
     text = extractLegacyOfficeText(buffer);
   }
 
-  if (!text && !base64) {
+  if (!text) {
     text = '（该文件未能在浏览器中提取文本，请使用支持文件输入的模型或先将文件转换为 PDF、TXT、CSV、DOCX、XLSX 后再上传。）';
   }
   return {
@@ -676,33 +766,106 @@ async function parseAttachment(file) {
     type: isPdf ? 'application/pdf' : (file.type || 'application/octet-stream'),
     size: file.size,
     text: text,
-    base64: base64,
     isPdf: isPdf
   };
 }
+
 function isImageFile(file) { return (file.type || '').indexOf('image/') === 0; }
+
 async function addFiles(files) {
-  var list = Array.from(files || []), slots = 10 - state.pendingFiles.length;
-  if (slots <= 0) { showToast('最多上传 10 个文件', 'error'); return; }
-  for (var i = 0; i < list.length && state.pendingFiles.length < 10; i++) {
+  var list = Array.from(files || []);
+  if (!list.length) return;
+
+  for (var i = 0; i < list.length; i++) {
     var file = list[i];
     if (!file) continue;
-    if (isImageFile(file)) { await addImages([file]); continue; }
-    if (file.size > MAX_FILE_SIZE) { showToast(file.name + ' 超过 12 MB 限制', 'error'); continue; }
-    try { state.pendingFiles.push(await parseAttachment(file)); renderAttachmentPreviews(); }
-    catch (e) { showToast(file.name + ' 处理失败：' + e.message, 'error'); }
+
+    // 1. 如果是图片，走图片流程
+    if (isImageFile(file)) {
+      await addImages([file]);
+      continue;
+    }
+
+    if (file.size > MAX_FILE_SIZE) {
+      showToast(file.name + ' 超过 12 MB 限制', 'error');
+      continue;
+    }
+
+    // 2. 如果是 PDF 文件，优先进行多模态页面光栅化（转高清图保留波形图与电路图）
+    var isPdf = fileExtension(file.name) === 'pdf' || (file.type === 'application/pdf');
+    if (isPdf) {
+      if (state.pendingFiles.length >= 10) {
+        showToast('最多上传 10 个文件', 'error');
+        continue;
+      }
+      showToast('正在解析 ' + file.name + ' 并光栅化为多模态高清图...', 'info');
+      try {
+        var buffer = await readFileBuffer(file);
+        var pdfResult = await renderPdfToPageImages(file, buffer);
+        var renderedPages = pdfResult.renderedPages || [];
+
+        // 将渲染出的各页高清图片加入 pendingImages，让大模型通过视觉多模态直接阅读电路与波形图
+        var addedImagesCount = 0;
+        for (var p = 0; p < renderedPages.length; p++) {
+          if (state.pendingImages.length < MAX_PENDING_IMAGES) {
+            state.pendingImages.push(renderedPages[p].dataUrl);
+            addedImagesCount++;
+          }
+        }
+
+        // 同时将结构化文件信息保存至 pendingFiles
+        state.pendingFiles.push({
+          name: file.name,
+          type: 'application/pdf',
+          size: file.size,
+          text: pdfResult.extractedText || '',
+          pageCount: pdfResult.totalPages,
+          renderedPageCount: addedImagesCount,
+          isPdf: true
+        });
+
+        renderAttachmentPreviews();
+        var extraNote = pdfResult.totalPages > addedImagesCount ? ('（已渲染前 ' + addedImagesCount + ' 页）') : '';
+        showToast('已成功将 ' + file.name + ' 光栅化为 ' + addedImagesCount + ' 页高清图' + extraNote + '，波形图与电路图已就绪！', 'success');
+      } catch (pdfErr) {
+        console.warn('PDF 光栅化失败，降级为普通文件附件处理:', pdfErr);
+        try {
+          state.pendingFiles.push(await parseAttachment(file));
+          renderAttachmentPreviews();
+        } catch (e) {
+          showToast(file.name + ' 处理失败: ' + e.message, 'error');
+        }
+      }
+      continue;
+    }
+
+    // 3. 常规文件
+    if (state.pendingFiles.length >= 10) {
+      showToast('最多上传 10 个文件', 'error');
+      continue;
+    }
+    try {
+      state.pendingFiles.push(await parseAttachment(file));
+      renderAttachmentPreviews();
+    } catch (e) {
+      showToast(file.name + ' 处理失败: ' + e.message, 'error');
+    }
   }
-  if (!list.length) return;
+
   renderAttachmentPreviews();
 }
+
 function removeFile(i) { state.pendingFiles.splice(i, 1); renderAttachmentPreviews(); }
+
 function renderAttachmentPreviews() {
-  var html = state.pendingImages.map(function (img, i) { return '<div class="image-preview-item"><img src="' + esc(img) + '" alt="图片预览"><button class="image-preview-remove" data-kind="image" data-index="' + i + '">×</button></div>'; }).join('');
+  var html = state.pendingImages.map(function (img, i) {
+    return '<div class="image-preview-item" title="点击放大预览"><img src="' + esc(img) + '" alt="图片预览" style="cursor:zoom-in"><button class="image-preview-remove" data-kind="image" data-index="' + i + '">×</button></div>';
+  }).join('');
   html += state.pendingFiles.map(function (f, i) {
     var isPdf = f.isPdf || (f.type === 'application/pdf') || /\.pdf$/i.test(f.name);
     var iconClass = isPdf ? 'file-preview-icon file-icon-pdf' : 'file-preview-icon';
     var iconText = isPdf ? 'PDF' : '▧';
-    var badgeHtml = isPdf ? '<span class="file-preview-badge" title="大模型原生文档视觉直传">原生直传</span>' : '';
+    var badgeHtml = isPdf ? ('<span class="file-preview-badge" title="大模型原生视觉阅读">' + (f.renderedPageCount ? ('已栅格化 ' + f.renderedPageCount + ' 页') : '多模态') + '</span>') : '';
     return '<div class="file-preview-item' + (isPdf ? ' is-pdf' : '') + '">' +
       '<span class="' + iconClass + '">' + iconText + '</span>' +
       '<span class="file-preview-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span>' +
@@ -713,7 +876,19 @@ function renderAttachmentPreviews() {
   }).join('');
   dom.attachmentPreviews.innerHTML = html;
   syncOutlineBounds();
-  dom.attachmentPreviews.querySelectorAll('.image-preview-remove, .file-preview-remove').forEach(function (btn) { btn.addEventListener('click', function (e) { e.stopPropagation(); if (this.dataset.kind === 'file') removeFile(parseInt(this.dataset.index, 10)); else removeImage(parseInt(this.dataset.index, 10)); }); });
+  dom.attachmentPreviews.querySelectorAll('.image-preview-item img').forEach(function (imgEl) {
+    imgEl.addEventListener('click', function () {
+      dom.imageOverlayImg.src = this.src;
+      dom.imageOverlay.classList.add('active');
+    });
+  });
+  dom.attachmentPreviews.querySelectorAll('.image-preview-remove, .file-preview-remove').forEach(function (btn) {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
+      if (this.dataset.kind === 'file') removeFile(parseInt(this.dataset.index, 10));
+      else removeImage(parseInt(this.dataset.index, 10));
+    });
+  });
 }
 // ─── Init ───────────────────────────────────────────────────────
 
@@ -2601,8 +2776,8 @@ function resizeImg(file, maxW, maxH, quality) {
 }
 
 async function addImages(files) {
-  var avail = 5 - state.pendingImages.length;
-  if (avail <= 0) { showToast('最多只能上传 5 张图片', 'error'); return; }
+  var avail = MAX_PENDING_IMAGES - state.pendingImages.length;
+  if (avail <= 0) { showToast('最多只能上传 ' + MAX_PENDING_IMAGES + ' 张图片/页面', 'error'); return; }
   var list = Array.from(files).slice(0, avail);
   for (var i = 0; i < list.length; i++) {
     if (!list[i].type.startsWith('image/')) continue;
@@ -2708,7 +2883,11 @@ function buildBody(messages, model, stream) {
       if (m.files && m.files.length) {
         for (var f = 0; f < m.files.length; f++) {
           var file = m.files[f];
-          if (file.base64 && (file.isPdf || file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) {
+          if (file.isPdf && file.renderedPageCount) {
+            if (file.text && file.text.trim()) {
+              content.push({ type: 'text', text: '\n\n【附件：' + file.name + ' 参考文本】\n' + file.text + '\n【附件结束】' });
+            }
+          } else if (file.base64 && (file.isPdf || file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) {
             content.push({
               type: 'file',
               file: {
@@ -3024,7 +3203,14 @@ function buildResponsesBody(messages, model, stream) {
       if (m.files && m.files.length) {
         for (var f = 0; f < m.files.length; f++) {
           var file = m.files[f];
-          if (file.base64 && (file.isPdf || file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) {
+          if (file.isPdf && file.renderedPageCount) {
+            if (file.text && file.text.trim()) {
+              contentParts.push({
+                type: 'input_text',
+                text: '\n\n【附件：' + file.name + ' 参考文本】\n' + file.text + '\n【附件结束】'
+              });
+            }
+          } else if (file.base64 && (file.isPdf || file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) {
             contentParts.push({
               type: 'input_file',
               filename: file.name,
@@ -4469,7 +4655,7 @@ document.addEventListener('paste', function (e) {
           oversized++;
           return;
         }
-        if (state.pendingImages.length < 5) {
+        if (state.pendingImages.length < MAX_PENDING_IMAGES) {
           state.pendingImages.push(imgData);
           addedCount++;
         }
@@ -4490,8 +4676,8 @@ document.addEventListener('paste', function (e) {
         showToast('已提取图片，但有 ' + oversized + ' 张因超过 15MB 被跳过', 'warning');
       } else if (addedCount > 0) {
         showToast('已自动将粘贴的 Base64 转为图片附件 (' + addedCount + ' 张)', 'success');
-      } else if (state.pendingImages.length >= 5) {
-        showToast('图片附件已达 5 张上限', 'warning');
+      } else if (state.pendingImages.length >= MAX_PENDING_IMAGES) {
+        showToast('图片附件已达 ' + MAX_PENDING_IMAGES + ' 张上限', 'warning');
       }
     }
   }
