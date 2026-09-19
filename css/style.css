@@ -2030,6 +2030,51 @@ select:focus-visible {
 
 .file-preview-remove:hover { color: var(--text-primary); }
 
+/* PDF Native Multimodal Badges & Styling */
+.file-preview-item.is-pdf {
+  border-color: rgba(255, 77, 79, 0.4);
+  background: rgba(255, 77, 79, 0.08);
+}
+.file-icon-pdf {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #ff4d4f;
+  color: #fff !important;
+  font-size: 9px !important;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+  letter-spacing: 0.5px;
+  line-height: 1.2;
+}
+.file-preview-badge {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(255, 77, 79, 0.18);
+  color: #ff7875;
+  border: 1px solid rgba(255, 77, 79, 0.3);
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 10px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.message-file.is-pdf {
+  border-color: rgba(255, 77, 79, 0.35);
+  background: rgba(255, 77, 79, 0.06);
+}
+.message-file-badge {
+  font-size: 10px;
+  background: rgba(255, 77, 79, 0.18);
+  color: #ff7875;
+  border: 1px solid rgba(255, 77, 79, 0.3);
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 2px;
+  white-space: nowrap;
+}
+
 .visually-hidden {
   position: absolute;
   width: 1px;

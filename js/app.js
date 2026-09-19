@@ -647,15 +647,38 @@ function extractLegacyOfficeText(buffer) {
   return clampFileText(out.join(' '));
 }
 function readFileBuffer(file) { return new Promise(function (resolve, reject) { var r = new FileReader(); r.onload = function () { resolve(r.result); }; r.onerror = function () { reject(r.error || new Error('文件读取失败')); }; r.readAsArrayBuffer(file); }); }
+function readFileDataUrl(file) { return new Promise(function (resolve, reject) { var r = new FileReader(); r.onload = function () { resolve(r.result); }; r.onerror = function () { reject(r.error || new Error('文件读取失败')); }; r.readAsDataURL(file); }); }
 async function parseAttachment(file) {
   var ext = fileExtension(file.name), buffer = await readFileBuffer(file), text = '';
   var mime = String(file.type || '');
-  if (TEXT_EXTENSIONS.test(file.name) || mime.indexOf('text/') === 0 || mime === 'application/json') text = clampFileText(decodeUtf8(buffer));
-  else if (ext === 'pdf' || file.type === 'application/pdf') text = extractPdfText(buffer);
-  else if (ARCHIVE_EXTENSIONS.test(file.name)) text = await extractOfficeText(file, buffer);
-  else if (LEGACY_BINARY_EXTENSIONS.test(file.name)) text = extractLegacyOfficeText(buffer);
-  if (!text) text = '（该文件未能在浏览器中提取文本，请使用支持文件输入的模型或先将文件转换为 PDF、TXT、CSV、DOCX、XLSX、PPTX 后再上传。）';
-  return { name: file.name, type: file.type || 'application/octet-stream', size: file.size, text: text };
+  var isPdf = (ext === 'pdf' || mime === 'application/pdf');
+  var base64 = null;
+
+  if (isPdf) {
+    try {
+      base64 = await readFileDataUrl(file);
+    } catch (_) {}
+    text = extractPdfText(buffer);
+    if (!text) text = '（原生 PDF 文档，包含多模态排版/图表，已转为 Base64 原生直传）';
+  } else if (TEXT_EXTENSIONS.test(file.name) || mime.indexOf('text/') === 0 || mime === 'application/json') {
+    text = clampFileText(decodeUtf8(buffer));
+  } else if (ARCHIVE_EXTENSIONS.test(file.name)) {
+    text = await extractOfficeText(file, buffer);
+  } else if (LEGACY_BINARY_EXTENSIONS.test(file.name)) {
+    text = extractLegacyOfficeText(buffer);
+  }
+
+  if (!text && !base64) {
+    text = '（该文件未能在浏览器中提取文本，请使用支持文件输入的模型或先将文件转换为 PDF、TXT、CSV、DOCX、XLSX 后再上传。）';
+  }
+  return {
+    name: file.name,
+    type: isPdf ? 'application/pdf' : (file.type || 'application/octet-stream'),
+    size: file.size,
+    text: text,
+    base64: base64,
+    isPdf: isPdf
+  };
 }
 function isImageFile(file) { return (file.type || '').indexOf('image/') === 0; }
 async function addFiles(files) {
@@ -675,7 +698,19 @@ async function addFiles(files) {
 function removeFile(i) { state.pendingFiles.splice(i, 1); renderAttachmentPreviews(); }
 function renderAttachmentPreviews() {
   var html = state.pendingImages.map(function (img, i) { return '<div class="image-preview-item"><img src="' + esc(img) + '" alt="图片预览"><button class="image-preview-remove" data-kind="image" data-index="' + i + '">×</button></div>'; }).join('');
-  html += state.pendingFiles.map(function (f, i) { return '<div class="file-preview-item"><span class="file-preview-icon">▧</span><span class="file-preview-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span><span class="file-preview-size">' + formatFileSize(f.size) + '</span><button class="file-preview-remove" data-kind="file" data-index="' + i + '">×</button></div>'; }).join('');
+  html += state.pendingFiles.map(function (f, i) {
+    var isPdf = f.isPdf || (f.type === 'application/pdf') || /\.pdf$/i.test(f.name);
+    var iconClass = isPdf ? 'file-preview-icon file-icon-pdf' : 'file-preview-icon';
+    var iconText = isPdf ? 'PDF' : '▧';
+    var badgeHtml = isPdf ? '<span class="file-preview-badge" title="大模型原生文档视觉直传">原生直传</span>' : '';
+    return '<div class="file-preview-item' + (isPdf ? ' is-pdf' : '') + '">' +
+      '<span class="' + iconClass + '">' + iconText + '</span>' +
+      '<span class="file-preview-name" title="' + esc(f.name) + '">' + esc(f.name) + '</span>' +
+      badgeHtml +
+      '<span class="file-preview-size">' + formatFileSize(f.size) + '</span>' +
+      '<button class="file-preview-remove" data-kind="file" data-index="' + i + '">×</button>' +
+    '</div>';
+  }).join('');
   dom.attachmentPreviews.innerHTML = html;
   syncOutlineBounds();
   dom.attachmentPreviews.querySelectorAll('.image-preview-remove, .file-preview-remove').forEach(function (btn) { btn.addEventListener('click', function (e) { e.stopPropagation(); if (this.dataset.kind === 'file') removeFile(parseInt(this.dataset.index, 10)); else removeImage(parseInt(this.dataset.index, 10)); }); });
@@ -1427,7 +1462,18 @@ function createBubbleElement(msg, idx) {
   }
   var filesHtml = '';
   if (msg.files && msg.files.length) {
-    filesHtml = '<div class="message-files">' + msg.files.map(function (f) { return '<div class="message-file" title="' + esc(f.name) + '"><span class="message-file-icon">▧</span><span class="message-file-name">' + esc(f.name) + '</span><span class="file-preview-size">' + formatFileSize(f.size || 0) + '</span></div>'; }).join('') + '</div>';
+    filesHtml = '<div class="message-files">' + msg.files.map(function (f) {
+      var isPdf = f.isPdf || (f.type === 'application/pdf') || /\.pdf$/i.test(f.name);
+      var iconClass = isPdf ? 'message-file-icon file-icon-pdf' : 'message-file-icon';
+      var iconText = isPdf ? 'PDF' : '▧';
+      var badgeHtml = isPdf ? '<span class="message-file-badge">PDF 原生直传</span>' : '';
+      return '<div class="message-file' + (isPdf ? ' is-pdf' : '') + '" title="' + esc(f.name) + '">' +
+        '<span class="' + iconClass + '">' + iconText + '</span>' +
+        '<span class="message-file-name">' + esc(f.name) + '</span>' +
+        badgeHtml +
+        '<span class="file-preview-size">' + formatFileSize(f.size || 0) + '</span>' +
+      '</div>';
+    }).join('') + '</div>';
   }
 
   var txt = '';
@@ -2024,6 +2070,80 @@ async function resendFromMessage(el, idx) {
   });
 }
 
+// 针对不支持原生 PDF 多模态文件传输的旧网关或纯文本模型，将 type: 'file' / 'input_file' 平滑降级为提取的纯文本分片
+function downgradeNativeFilesToText(body) {
+  var changed = false;
+  if (!body) return false;
+
+  // 1. Chat Completions 协议中的 messages 数组
+  if (Array.isArray(body.messages)) {
+    for (var i = 0; i < body.messages.length; i++) {
+      var m = body.messages[i];
+      if (Array.isArray(m.content)) {
+        for (var j = 0; j < m.content.length; j++) {
+          var part = m.content[j];
+          if (part && part.type === 'file' && part.file) {
+            var fileName = part.file.filename || '文档.pdf';
+            var foundText = '';
+            for (var mi = 0; mi < state.currentMessages.length; mi++) {
+              var origM = state.currentMessages[mi];
+              if (Array.isArray(origM.files)) {
+                for (var fi = 0; fi < origM.files.length; fi++) {
+                  if (origM.files[fi].name === fileName) {
+                    foundText = origM.files[fi].text || '';
+                    break;
+                  }
+                }
+              }
+              if (foundText) break;
+            }
+            m.content[j] = {
+              type: 'text',
+              text: '\n\n【附件：' + fileName + '】\n' + (foundText || '（该网关不支持原生多模态 PDF 直传，已自动降级为文本分片）') + '\n【附件结束】'
+            };
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Responses API 协议中的 input 数组
+  if (Array.isArray(body.input)) {
+    for (var k = 0; k < body.input.length; k++) {
+      var item = body.input[k];
+      if (Array.isArray(item.content)) {
+        for (var l = 0; l < item.content.length; l++) {
+          var itemPart = item.content[l];
+          if (itemPart && itemPart.type === 'input_file') {
+            var fName = itemPart.filename || '文档.pdf';
+            var fText = '';
+            for (var mIdx = 0; mIdx < state.currentMessages.length; mIdx++) {
+              var currM = state.currentMessages[mIdx];
+              if (Array.isArray(currM.files)) {
+                for (var fIdx = 0; fIdx < currM.files.length; fIdx++) {
+                  if (currM.files[fIdx].name === fName) {
+                    fText = currM.files[fIdx].text || '';
+                    break;
+                  }
+                }
+              }
+              if (fText) break;
+            }
+            item.content[l] = {
+              type: 'input_text',
+              text: '\n\n【附件：' + fName + '】\n' + (fText || '（该网关不支持原生多模态 PDF 直传，已自动降级为文本分片）') + '\n【附件结束】'
+            };
+            changed = true;
+          }
+        }
+      }
+    }
+  }
+
+  return changed;
+}
+
 async function streamApiResponse() {
   setInputEnabled(false);
   state.isStreaming = true;
@@ -2169,6 +2289,10 @@ async function streamApiResponse() {
         body.input.unshift({ role: 'system', content: body.instructions });
         delete body.instructions;
         bodyChanged = true;
+      }
+      if (downgradeNativeFilesToText(body)) {
+        bodyChanged = true;
+        console.warn('当前网关或模型不支持原生 PDF 视觉解析 (400)，已自动降级为文本分片重试...');
       }
       if (bodyChanged) {
         var retryResult = await executeSmartApiRequest(endpoint, reqHeaders, body, state.abortController.signal, activeRoute);
@@ -2584,7 +2708,17 @@ function buildBody(messages, model, stream) {
       if (m.files && m.files.length) {
         for (var f = 0; f < m.files.length; f++) {
           var file = m.files[f];
-          content.push({ type: 'text', text: '\n\n【附件：' + file.name + '】\n' + (file.text || '') + '\n【附件结束】' });
+          if (file.base64 && (file.isPdf || file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) {
+            content.push({
+              type: 'file',
+              file: {
+                filename: file.name,
+                file_data: file.base64
+              }
+            });
+          } else {
+            content.push({ type: 'text', text: '\n\n【附件：' + file.name + '】\n' + (file.text || '') + '\n【附件结束】' });
+          }
         }
       }
       msgs.push({ role: m.role, content: content });
@@ -2612,7 +2746,13 @@ function estimateMsgTokens(m) {
     for (var i = 0; i < m.content.length; i++) {
       var p = m.content[i];
       if (!p) continue;
-      n += (p.type === 'image_url' || p.type === 'input_image') ? 1500 : estimateTextTokens(p.text);
+      if (p.type === 'image_url' || p.type === 'input_image') {
+        n += 1500;
+      } else if (p.type === 'file' || p.type === 'input_file') {
+        n += 2500;
+      } else {
+        n += estimateTextTokens(p.text);
+      }
     }
     return n;
   }
@@ -2884,10 +3024,19 @@ function buildResponsesBody(messages, model, stream) {
       if (m.files && m.files.length) {
         for (var f = 0; f < m.files.length; f++) {
           var file = m.files[f];
-          contentParts.push({
-            type: 'input_text',
-            text: '\n\n【附件：' + file.name + '】\n' + (file.text || '') + '\n【附件结束】'
-          });
+          if (file.base64 && (file.isPdf || file.type === 'application/pdf' || /\.pdf$/i.test(file.name))) {
+            contentParts.push({
+              type: 'input_file',
+              filename: file.name,
+              file_data: file.base64,
+              file_url: file.base64
+            });
+          } else {
+            contentParts.push({
+              type: 'input_text',
+              text: '\n\n【附件：' + file.name + '】\n' + (file.text || '') + '\n【附件结束】'
+            });
+          }
         }
       }
       inputItems.push({ role: m.role, content: contentParts });
