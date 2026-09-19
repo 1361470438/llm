@@ -61,6 +61,22 @@ export default {
               },
             }
           );
+        if (targetUrl.protocol !== 'https:' && targetUrl.protocol !== 'http:') {
+          return new Response(
+            JSON.stringify({
+              error: {
+                message: `不支持的请求协议: "${targetUrl.protocol}"，仅支持 HTTP/HTTPS`,
+                type: 'invalid_protocol',
+              },
+            }),
+            {
+              status: 400,
+              headers: {
+                ...CORS_HEADERS,
+                'Content-Type': 'application/json; charset=utf-8',
+              },
+            }
+          );
         }
 
         // 构建向上游转发的请求头
@@ -72,10 +88,6 @@ export default {
         newHeaders.delete('cf-ipcountry');
         newHeaders.delete('cf-ray');
         newHeaders.delete('cf-visitor');
-
-        if (env.API_KEY && !newHeaders.has('Authorization')) {
-          newHeaders.set('Authorization', `Bearer ${env.API_KEY}`);
-        }
 
         // 向真实上游发起请求
         const reqInit = {

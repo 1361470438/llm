@@ -554,7 +554,15 @@ function showToast(msg, type) {
   dom.toastContainer.appendChild(t);
   setTimeout(function () { t.style.opacity = '0'; t.style.transition = 'all .3s'; setTimeout(function () { t.remove(); }, 300); }, 3000);
 }
-function esc(str) { var d = document.createElement('div'); d.textContent = str; return d.innerHTML; }
+function esc(str) {
+  if (str == null) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 function fmtTokens(n) { return n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : String(n); }
 
 // ─── File and attachment helpers ───────────────────────────────
@@ -1217,7 +1225,8 @@ function persistConvo() {
 }
 function flushConvoSave() {
   clearTimeout(convoSaveTimer);
-  var c = arguments.length ? arguments[0] : (convoSaveTarget || state.conversations.find(function (x) { return x.id === state.currentConvoId; }));
+  var target = (arguments.length && arguments[0] && !(arguments[0] instanceof Event) && typeof arguments[0].id === 'string') ? arguments[0] : null;
+  var c = target || convoSaveTarget || state.conversations.find(function (x) { return x.id === state.currentConvoId; });
   convoSaveTarget = null;
   if (!c) return;
   if (convoStorageMode === 'indexeddb' && convoDb) {
@@ -1245,7 +1254,7 @@ function flushConvoSave() {
     showToast('浏览器存储空间已满，对话历史可能无法保存，建议导出备份', 'error');
   }
 }
-window.addEventListener('beforeunload', flushConvoSave);
+window.addEventListener('beforeunload', function () { flushConvoSave(); });
 
 // ─── Messages ───────────────────────────────────────────────────
 
@@ -2128,9 +2137,11 @@ async function streamApiResponse() {
   }
 
   var reqHeaders = {
-    'Content-Type': 'application/json',
-    'Authorization': 'Bearer ' + group.apiKey
+    'Content-Type': 'application/json'
   };
+  if (group.apiKey && group.apiKey.trim()) {
+    reqHeaders['Authorization'] = 'Bearer ' + group.apiKey.trim();
+  }
 
   try {
     var reqResult = await executeSmartApiRequest(endpoint, reqHeaders, body, state.abortController.signal);
@@ -2689,6 +2700,15 @@ function resolveApiEndpoint(apiBase, protocol) {
   }
 }
 
+function toAbsoluteUrl(url) {
+  try {
+    var baseOrigin = (typeof window !== 'undefined' && window.location && window.location.origin) ? window.location.origin : 'http://localhost';
+    return new URL(url, baseOrigin).toString();
+  } catch (_) {
+    return url;
+  }
+}
+
 // 统一内置跨域代理网关：默认主网关 + 容灾备用网关
 var PROXY_GATEWAYS = [
   'https://api1.yulucha.xyz/api/proxy',
@@ -2696,15 +2716,55 @@ var PROXY_GATEWAYS = [
 ];
 
 /**
+ * 获取可用的代理网关候选列表：
+ * 1. 同源一体化代理：Web 环境（Cloudflare Pages）下优先走本站同源 /api/proxy（零跨域、零 OPTIONS 预检）
+ * 2. 用户在设置中自定义配置的外部 Worker 代理网关（若有）
+ * 3. 内置远程主备容灾网关（api1.yulucha.xyz -> workers.dev）
+ */
+function getAvailableProxyGateways(targetEndpoint) {
+  var list = [];
+  var isWeb = typeof window !== 'undefined' && window.location && window.location.protocol.startsWith('http');
+  var absTarget = toAbsoluteUrl(targetEndpoint);
+  var targetHost = '';
+  try { targetHost = new URL(absTarget).host; } catch (_) {}
+
+  // 1. 同源一体化代理
+  if (isWeb) {
+    var currentHost = window.location.host;
+    if (targetHost && targetHost !== currentHost) {
+      list.push('/api/proxy');
+    }
+  }
+
+  // 2. 用户在设置中自定义配置的外部代理网关
+  var s = typeof getSettings === 'function' ? getSettings() : {};
+  var customProxy = (s.proxyUrl || '').trim().replace(/\/+$/, '');
+  if (customProxy && /^https?:\/\//i.test(customProxy)) {
+    var customUrl = customProxy.endsWith('/api/proxy') ? customProxy : (customProxy + '/api/proxy');
+    if (list.indexOf(customUrl) === -1) list.push(customUrl);
+  }
+
+  // 3. 内置远程容灾备用网关
+  for (var i = 0; i < PROXY_GATEWAYS.length; i++) {
+    if (list.indexOf(PROXY_GATEWAYS[i]) === -1) {
+      list.push(PROXY_GATEWAYS[i]);
+    }
+  }
+
+  return list;
+}
+
+/**
  * 遍历代理网关发起请求，支持主备自动无缝容灾（调度过程中静默不报错）
  */
 async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gateways, originalError) {
   var lastError = originalError || new Error('所有代理网关均不可用');
+  var absoluteTarget = toAbsoluteUrl(targetEndpoint);
 
   for (var i = 0; i < gateways.length; i++) {
     var gatewayUrl = gateways[i];
     var proxyHeaders = Object.assign({}, headers);
-    proxyHeaders['x-target-url'] = targetEndpoint;
+    proxyHeaders['x-target-url'] = absoluteTarget;
 
     try {
       var proxyRes = await fetch(gatewayUrl, {
@@ -2738,16 +2798,18 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
  * 智能 API 请求调度：
  * 1. 用户发送信息，先直接向目标服务器发起请求，不进行后端转发；
  * 2. 如果出现跨域问题（CORS 报错 / Preflight 阻断 / WAF 403 页面），自动转发后端；
- * 3. 过程中自动路由不报错（默认 api1.yulucha.xyz，备用 shrill-hat-47ef.a1361470438.workers.dev）；
- * 4. 跨域再出问题再报错（仅在所有代理网关均不可用时抛出异常）。
+ * 3. 优先使用当前站点的同源代理网关 /api/proxy（一体化 Pages 部署），零跨域；
+ * 4. 过程中自动路由不报错（同源 -> api1.yulucha.xyz -> workers.dev 逐级无缝容灾）；
+ * 5. 跨域再出问题再报错（仅在所有代理网关均不可用时抛出异常）。
  */
 async function executeSmartApiRequest(targetEndpoint, headers, body, signal, preferredRoute) {
   var bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
+  var absoluteTarget = toAbsoluteUrl(targetEndpoint);
 
   // 1. 本地服务（localhost / 127.0.0.1）直接直连，不可通过远程云端代理
   var isLocal = false;
   try {
-    var u = new URL(targetEndpoint);
+    var u = new URL(absoluteTarget);
     if (u.hostname === 'localhost' || u.hostname === '127.0.0.1') {
       isLocal = true;
     }
@@ -2763,10 +2825,12 @@ async function executeSmartApiRequest(targetEndpoint, headers, body, signal, pre
     return { res: localRes, route: 'direct' };
   }
 
+  var availableGateways = getAvailableProxyGateways(targetEndpoint);
+
   // 2. 如果指定了已验证的生效代理路由（如 400 降级重试），优先走该通道
   if (preferredRoute && preferredRoute !== 'direct') {
     var gateways = [preferredRoute].concat(
-      PROXY_GATEWAYS.filter(function (g) { return g !== preferredRoute; })
+      availableGateways.filter(function (g) { return g !== preferredRoute; })
     );
     return await tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gateways);
   }
@@ -2783,8 +2847,8 @@ async function executeSmartApiRequest(targetEndpoint, headers, body, signal, pre
     // 检查是否遇到目标服务器 WAF 阻断网页（例如 Cloudflare 403 HTML 质询），若是则转入代理
     var contentType = (directRes.headers.get('content-type') || '').toLowerCase();
     if (directRes.status === 403 && contentType.indexOf('text/html') !== -1) {
-      console.warn('直连目标服务器返回 403 HTML 网页，自动切换至内置代理网关...');
-      return await tryProxyGateways(targetEndpoint, headers, bodyStr, signal, PROXY_GATEWAYS);
+      console.warn('直连目标服务器返回 403 HTML 网页，自动切换至代理网关...');
+      return await tryProxyGateways(targetEndpoint, headers, bodyStr, signal, availableGateways);
     }
 
     return { res: directRes, route: 'direct' };
@@ -2793,8 +2857,8 @@ async function executeSmartApiRequest(targetEndpoint, headers, body, signal, pre
     if ((signal && signal.aborted) || directErr.name === 'AbortError') throw directErr;
 
     // 出现跨域问题（如 TypeError: Failed to fetch 或连接受阻），静默转交后端代理
-    console.warn('直连目标服务器失败（跨域受限），正在自动无缝切换至内置网关...', directErr);
-    return await tryProxyGateways(targetEndpoint, headers, bodyStr, signal, PROXY_GATEWAYS, directErr);
+    console.warn('直连目标服务器失败（跨域受限），正在自动无缝切换至代理网关...', directErr);
+    return await tryProxyGateways(targetEndpoint, headers, bodyStr, signal, availableGateways, directErr);
   }
 }
 
@@ -3158,10 +3222,17 @@ function regenerateFromMessage(idx) {
   var userMsg = msgs[userIdx];
   msgs.splice(userIdx); // 连用户消息一起删，由 sendUserMessage 重新 push（regenerate 后时间戳更新）
   renderMessages();
-  persistConvo();
-  renderSidebar();
+  state.isStreaming = true;
+  setInputEnabled(false);
   sendUserMessage(userMsg.text, userMsg.images || [], userMsg.files || []).then(function (result) {
     if (result && result.failedNoData) restoreFailedSend(result);
+  }).catch(function (err) {
+    console.error('重新生成失败:', err);
+    showToast('重新生成失败: ' + (err.message || '未知错误'), 'error');
+  }).finally(function () {
+    state.isStreaming = false;
+    setInputEnabled(true);
+    if (dom.messageInput) dom.messageInput.focus();
   });
 }
 

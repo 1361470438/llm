@@ -47,6 +47,24 @@ export async function onRequest(context) {
       targetUrl = new URL(targetPath + url.search, targetBase.origin);
     }
 
+    if (targetUrl.protocol !== 'https:' && targetUrl.protocol !== 'http:') {
+      return new Response(
+        JSON.stringify({
+          error: {
+            message: `不支持的请求协议: "${targetUrl.protocol}"，仅支持 HTTP/HTTPS`,
+            type: 'invalid_protocol',
+          },
+        }),
+        {
+          status: 400,
+          headers: {
+            ...CORS_HEADERS,
+            'Content-Type': 'application/json; charset=utf-8',
+          },
+        }
+      );
+    }
+
     const newHeaders = new Headers(request.headers);
     newHeaders.set('Host', targetUrl.host);
     newHeaders.delete('x-target-url');
@@ -55,11 +73,6 @@ export async function onRequest(context) {
     newHeaders.delete('cf-ipcountry');
     newHeaders.delete('cf-ray');
     newHeaders.delete('cf-visitor');
-
-    // 支持在 Cloudflare 后台设置全局 API_KEY（如果前端没传）
-    if (env.API_KEY && !newHeaders.has('Authorization')) {
-      newHeaders.set('Authorization', `Bearer ${env.API_KEY}`);
-    }
 
     const reqInit = {
       method: request.method,

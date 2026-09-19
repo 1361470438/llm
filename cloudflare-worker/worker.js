@@ -104,6 +104,24 @@ export default {
         );
       }
 
+      if (targetUrl.protocol !== 'https:' && targetUrl.protocol !== 'http:') {
+        return new Response(
+          JSON.stringify({
+            error: {
+              message: `不支持的请求协议: "${targetUrl.protocol}"，仅支持 HTTP/HTTPS`,
+              type: 'invalid_protocol'
+            }
+          }),
+          {
+            status: 400,
+            headers: {
+              ...CORS_HEADERS,
+              'Content-Type': 'application/json; charset=utf-8',
+            }
+          }
+        );
+      }
+
       // 4. 构建向上游转发的请求头
       const newHeaders = new Headers(request.headers);
       newHeaders.set('Host', targetUrl.host);
@@ -114,11 +132,6 @@ export default {
       newHeaders.delete('cf-ipcountry');
       newHeaders.delete('cf-ray');
       newHeaders.delete('cf-visitor');
-
-      // 支持在后台环境变量配置全局 API_KEY 兜底
-      if (env && env.API_KEY && !newHeaders.has('Authorization')) {
-        newHeaders.set('Authorization', `Bearer ${env.API_KEY}`);
-      }
 
       // 5. 发起上游请求（原生透传请求体与流）
       const reqInit = {
