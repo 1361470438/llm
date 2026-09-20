@@ -523,8 +523,11 @@ function normalizeSettings(s) {
     return g;
   });
   s.appearance = Object.assign({ fontSize: 14 }, s.appearance || {});
-  // 全局 API 跨域代理网关（空为同域自动代理）
+  // 全局 API 跨域代理网关（空为自动按 PROXY_GATEWAYS 首选节点）
   s.proxyUrl = typeof s.proxyUrl === 'string' ? s.proxyUrl : '';
+  if (s.proxyUrl.indexOf('yulucha.xyz') !== -1 || s.proxyUrl.indexOf('workers.dev') !== -1) {
+    s.proxyUrl = '';
+  }
   // 思维链默认关闭：仅状态栏橙色「思考中」，开启后才显示思考内容
   s.showThinking = !!s.showThinking;
   return s;
@@ -3110,17 +3113,19 @@ function toAbsoluteUrl(url) {
   }
 }
 
-// 统一内置跨域代理网关：默认主网关 + 容灾备用网关
+// 统一内置跨域代理网关：优先走免费 Cloudflare 代理，超时/失败自动无缝降级至国内阿里云专属函数
 var PROXY_GATEWAYS = [
   'https://api1.yulucha.xyz/api/proxy',
+  'https://transfer-sybhttgkgu.cn-hangzhou.fcapp.run',
   'https://shrill-hat-47ef.a1361470438.workers.dev/api/proxy'
 ];
 
 /**
  * 获取可用的代理网关候选列表：
- * 1. 同源一体化代理：Web 环境（Cloudflare Pages）下优先走本站同源 /api/proxy（零跨域、零 OPTIONS 预检）
- * 2. 用户在设置中自定义配置的外部 Worker 代理网关（若有）
- * 3. 内置远程主备容灾网关（api1.yulucha.xyz -> workers.dev）
+ * 1. 同源一体化代理 /api/proxy（若在 Cloudflare Pages 部署环境）
+ * 2. 免费 Cloudflare 远程网关（api1.yulucha.xyz，零成本首选）
+ * 3. 国内阿里云高可用函数网关（transfer-sybhttgkgu...，国内极速兜底备用）
+ * 4. 备用容灾网关（workers.dev）
  */
 function getAvailableProxyGateways(targetEndpoint) {
   var list = [];
@@ -3129,7 +3134,7 @@ function getAvailableProxyGateways(targetEndpoint) {
   var targetHost = '';
   try { targetHost = new URL(absTarget).host; } catch (_) {}
 
-  // 1. 同源一体化代理
+  // 1. 同源一体化代理（如果在 Cloudflare Pages 上运行，优先走本站同源 /api/proxy 免跨域）
   if (isWeb) {
     var currentHost = window.location.host;
     if (targetHost && targetHost !== currentHost) {
@@ -3137,26 +3142,31 @@ function getAvailableProxyGateways(targetEndpoint) {
     }
   }
 
-  // 2. 用户在设置中自定义配置的外部代理网关
-  var s = typeof getSettings === 'function' ? getSettings() : {};
-  var customProxy = (s.proxyUrl || '').trim().replace(/\/+$/, '');
-  if (customProxy && /^https?:\/\//i.test(customProxy)) {
-    var customUrl = customProxy.endsWith('/api/proxy') ? customProxy : (customProxy + '/api/proxy');
-    if (list.indexOf(customUrl) === -1) list.push(customUrl);
-  }
-
-  // 3. 内置远程容灾备用网关
+  // 2. 内置代理网关队列（首选 CF 免费代理 -> 超时/失败切国内阿里云 -> 备用 workers.dev）
   for (var i = 0; i < PROXY_GATEWAYS.length; i++) {
     if (list.indexOf(PROXY_GATEWAYS[i]) === -1) {
       list.push(PROXY_GATEWAYS[i]);
     }
   }
 
+  // 3. 用户在设置中自定义配置的外部代理网关（过滤历史旧残留，若有显式自定义则插入首位）
+  var s = typeof getSettings === 'function' ? getSettings() : {};
+  var customProxy = (s.proxyUrl || '').trim().replace(/\/+$/, '');
+  if (customProxy && (customProxy.indexOf('yulucha.xyz') !== -1 || customProxy.indexOf('workers.dev') !== -1)) {
+    customProxy = '';
+  }
+  if (customProxy && /^https?:\/\//i.test(customProxy)) {
+    var customUrl = customProxy.endsWith('/api/proxy') ? customProxy : customProxy;
+    if (list.indexOf(customUrl) === -1) list.unshift(customUrl);
+  }
+
+  console.info('[ProxyGateways] 当前代理网关就绪队列 (CF免费首选 -> 阿里云兜底):', list);
   return list;
 }
 
 /**
  * 遍历代理网关发起请求，支持主备自动无缝容灾（调度过程中静默不报错）
+ * 调度策略：优先使用免费 Cloudflare 网关，若超时（6秒无响应）或异常，自动无缝切换至国内阿里云函数网关
  */
 async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gateways, originalError) {
   var lastError = originalError || new Error('所有代理网关均不可用');
@@ -3167,16 +3177,44 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
     var proxyHeaders = Object.assign({}, headers);
     proxyHeaders['x-target-url'] = absoluteTarget;
 
+    // 针对免费海外/CF网关设置首包/连接超时（6秒），超时立即自动无缝切换至国内阿里云
+    var isDomesticGateway = gatewayUrl.indexOf('fcapp.run') !== -1;
+    var timeoutMs = isDomesticGateway ? 120000 : 6000;
+    var gatewayController = new AbortController();
+    var timeoutTriggered = false;
+
+    var onUserAbort = function () {
+      try { gatewayController.abort(); } catch (_) {}
+    };
+    if (signal) {
+      if (signal.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+      signal.addEventListener('abort', onUserAbort, { once: true });
+    }
+
+    var timer = setTimeout(function () {
+      timeoutTriggered = true;
+      try { gatewayController.abort(); } catch (_) {}
+    }, timeoutMs);
+
     try {
       var proxyRes = await fetch(gatewayUrl, {
         method: 'POST',
         headers: proxyHeaders,
         body: bodyStr,
-        signal: signal
+        signal: gatewayController.signal
       });
 
-      // 若网关自身发生 502/503/504 错误且仍有备用网关，则静默尝试下一备用网关
-      if (!proxyRes.ok && (proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504) && i < gateways.length - 1) {
+      // 收到响应头立即清除超时计时器（后续长文本流式输出不受 6 秒限制）
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onUserAbort);
+
+      // 若网关发生 502/503/504（或在纯静态托管下同源 /api/proxy 返回 404），静默尝试下一备用网关
+      var isGatewayFailure = (proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504) ||
+                             (proxyRes.status === 404 && gatewayUrl === '/api/proxy');
+
+      if (!proxyRes.ok && isGatewayFailure && i < gateways.length - 1) {
         console.warn('代理网关 ' + gatewayUrl + ' 返回 ' + proxyRes.status + '，正在无缝切换备用网关...');
         continue;
       }
@@ -3184,10 +3222,18 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
       // 网关正常响应（包含 200 或上游业务返回的 400/401/403/429 等状态码）
       return { res: proxyRes, route: gatewayUrl };
     } catch (proxyErr) {
-      if ((signal && signal.aborted) || proxyErr.name === 'AbortError') throw proxyErr;
+      clearTimeout(timer);
+      if (signal) signal.removeEventListener('abort', onUserAbort);
+
+      // 如果是用户主动点击停止生成（Cancel），直接抛出，不触发切换
+      if (signal && signal.aborted) throw proxyErr;
 
       lastError = proxyErr;
-      console.warn('代理网关 ' + gatewayUrl + ' 连接异常，尝试下一个网关...', proxyErr);
+      if (timeoutTriggered) {
+        console.warn('代理网关 ' + gatewayUrl + ' 响应超时（' + (timeoutMs / 1000) + ' 秒无响应），正在自动无缝切换备用网关...');
+      } else {
+        console.warn('代理网关 ' + gatewayUrl + ' 连接异常，尝试下一个网关...', proxyErr);
+      }
     }
   }
 
