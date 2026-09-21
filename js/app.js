@@ -3233,8 +3233,8 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
     var proxyHeaders = Object.assign({}, headers);
     proxyHeaders['x-target-url'] = absoluteTarget;
 
-    // 1. 如果当前不是最后一个备选网关，先发轻量 OPTIONS 探测网关物理链路是否畅通
-    if (i < gateways.length - 1) {
+    // 1. 如果不是同源代理且不是最后一个备选网关，先发轻量 OPTIONS 探测网关物理链路是否畅通
+    if (gatewayUrl !== '/api/proxy' && i < gateways.length - 1) {
       var isAlive = await probeGatewayAlive(gatewayUrl, 3000, signal);
       if (signal && signal.aborted) {
         throw new DOMException('Aborted', 'AbortError');
@@ -3254,9 +3254,11 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
         signal: signal
       });
 
-      // 若网关发生 502/503/504（或在纯静态托管下同源 /api/proxy 返回 404），静默尝试下一备用网关
-      var isGatewayFailure = (proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504) ||
-                             (proxyRes.status === 404 && gatewayUrl === '/api/proxy');
+      // 准确区分：只有静态服务器无后端返回的 404 HTML 网页才算网关缺失；
+      // 若上游大模型中转站返回的是 404 JSON（如模型不存在/端点未开放），属于正常业务报错，绝不可当作网关宕机误切换！
+      var contentType = (proxyRes.headers.get('content-type') || '').toLowerCase();
+      var isStatic404 = (proxyRes.status === 404 && gatewayUrl === '/api/proxy' && contentType.indexOf('text/html') !== -1);
+      var isGatewayFailure = (proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504) || isStatic404;
 
       if (!proxyRes.ok && isGatewayFailure && i < gateways.length - 1) {
         gatewayStatusCache[gatewayUrl] = { alive: false, time: Date.now() };
@@ -3264,7 +3266,7 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
         continue;
       }
 
-      // 网关正常响应，标记存活并返回
+      // 网关正常响应（包含 200 或上游业务返回的 400/401/403/404 等模型报错），标记存活并直接返回
       gatewayStatusCache[gatewayUrl] = { alive: true, time: Date.now() };
       return { res: proxyRes, route: gatewayUrl };
     } catch (proxyErr) {
