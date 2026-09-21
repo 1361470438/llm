@@ -3233,8 +3233,10 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
     var proxyHeaders = Object.assign({}, headers);
     proxyHeaders['x-target-url'] = absoluteTarget;
 
-    // 1. 如果不是同源代理且不是最后一个备选网关，先发轻量 OPTIONS 探测网关物理链路是否畅通
-    if (gatewayUrl !== '/api/proxy' && i < gateways.length - 1) {
+    // 1. 如果当前不是最后一个备选网关，先发轻量 OPTIONS 探测网关物理链路是否畅通（3秒超时）
+    // 注意：同源 /api/proxy 没有浏览器的跨域预检，因此只会发 1 次几十毫秒的探活；
+    // 一旦内网阻断 Cloudflare，3 秒超时后立刻无缝切到国内阿里云，绝不会死等卡死！
+    if (i < gateways.length - 1) {
       var isAlive = await probeGatewayAlive(gatewayUrl, 3000, signal);
       if (signal && signal.aborted) {
         throw new DOMException('Aborted', 'AbortError');
@@ -3245,20 +3247,40 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
       }
     }
 
-    // 2. 链路畅通，发起真正的 POST 转发请求（不设粗暴短超时，允许大模型思考与长文本输出）
+    // 2. 链路畅通，发起真正的 POST 转发请求
+    // 设置 25 秒首包安全兜底（收到响应头立即清除），既允许推理模型思考，又防止服务端彻底挂起无响应
+    var postController = new AbortController();
+    var postTimeoutTriggered = false;
+    var postTimer = setTimeout(function () {
+      postTimeoutTriggered = true;
+      try { postController.abort(); } catch (_) {}
+    }, 25000);
+
+    var onUserAbort = function () {
+      try { postController.abort(); } catch (_) {}
+    };
+    if (signal) {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      signal.addEventListener('abort', onUserAbort, { once: true });
+    }
+
     try {
       var proxyRes = await fetch(gatewayUrl, {
         method: 'POST',
         headers: proxyHeaders,
         body: bodyStr,
-        signal: signal
+        signal: postController.signal
       });
 
-      // 准确区分：只有静态服务器无后端返回的 404 HTML 网页才算网关缺失；
-      // 若上游大模型中转站返回的是 404 JSON（如模型不存在/端点未开放），属于正常业务报错，绝不可当作网关宕机误切换！
+      // 只要收到响应头，立即解除 25 秒限制（长文本流式输出耗时数分钟也不受影响）
+      clearTimeout(postTimer);
+      if (signal) signal.removeEventListener('abort', onUserAbort);
+
+      // 覆盖所有 5xx（包括 Cloudflare 的 522 连接超时、524 网关超时等）与静态托管缺失的 404 HTML
       var contentType = (proxyRes.headers.get('content-type') || '').toLowerCase();
+      var is5xx = (proxyRes.status >= 500 && proxyRes.status <= 599);
       var isStatic404 = (proxyRes.status === 404 && gatewayUrl === '/api/proxy' && contentType.indexOf('text/html') !== -1);
-      var isGatewayFailure = (proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504) || isStatic404;
+      var isGatewayFailure = is5xx || isStatic404;
 
       if (!proxyRes.ok && isGatewayFailure && i < gateways.length - 1) {
         gatewayStatusCache[gatewayUrl] = { alive: false, time: Date.now() };
@@ -3270,11 +3292,20 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
       gatewayStatusCache[gatewayUrl] = { alive: true, time: Date.now() };
       return { res: proxyRes, route: gatewayUrl };
     } catch (proxyErr) {
+      clearTimeout(postTimer);
+      if (signal) signal.removeEventListener('abort', onUserAbort);
+
+      // 如果是用户主动点击停止（Cancel），直接抛出，不触发切换
       if (signal && signal.aborted) throw proxyErr;
 
       gatewayStatusCache[gatewayUrl] = { alive: false, time: Date.now() };
       lastError = proxyErr;
-      console.warn('代理网关 ' + gatewayUrl + ' 转发请求异常，尝试下一个网关...', proxyErr);
+
+      if (postTimeoutTriggered) {
+        console.warn('代理网关 ' + gatewayUrl + ' 首包无响应（超过25秒），正在自动无缝切换备用网关...');
+      } else {
+        console.warn('代理网关 ' + gatewayUrl + ' 转发请求异常，尝试下一个网关...', proxyErr);
+      }
     }
   }
 
