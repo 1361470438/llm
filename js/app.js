@@ -3164,9 +3164,65 @@ function getAvailableProxyGateways(targetEndpoint) {
   return list;
 }
 
+// 代理网关连通性快速探测缓存（存活状态缓存 45 秒，避免重复握手损耗）
+var gatewayStatusCache = {};
+
+/**
+ * 快速探测网关物理连通性（发轻量 OPTIONS 请求检测当前网络与网关握手是否畅通）
+ * @param {string} gatewayUrl - 代理网关地址
+ * @param {number} timeoutMs - 探测超时时间（默认 3000ms）
+ * @param {AbortSignal} [parentSignal] - 外部中止信号
+ * @returns {Promise<boolean>}
+ */
+async function probeGatewayAlive(gatewayUrl, timeoutMs, parentSignal) {
+  var now = Date.now();
+  var cached = gatewayStatusCache[gatewayUrl];
+  if (cached && (now - cached.time < 45000)) {
+    return cached.alive;
+  }
+
+  var probeController = new AbortController();
+  var onParentAbort = function () {
+    try { probeController.abort(); } catch (_) {}
+  };
+  if (parentSignal) {
+    if (parentSignal.aborted) return false;
+    parentSignal.addEventListener('abort', onParentAbort, { once: true });
+  }
+
+  var timer = setTimeout(function () {
+    try { probeController.abort(); } catch (_) {}
+  }, timeoutMs || 3000);
+
+  try {
+    var res = await fetch(gatewayUrl, {
+      method: 'OPTIONS',
+      signal: probeController.signal
+    });
+    clearTimeout(timer);
+    if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+
+    // 只要有预检响应（200, 204），且不是服务宕机 502/503/504 或未部署 404，即为通路畅通
+    var isAlive = (res.status === 200 || res.status === 204);
+    if (res.status === 404 && gatewayUrl === '/api/proxy') isAlive = false;
+    if (res.status >= 502 && res.status <= 504) isAlive = false;
+
+    gatewayStatusCache[gatewayUrl] = { alive: isAlive, time: now };
+    return isAlive;
+  } catch (_) {
+    clearTimeout(timer);
+    if (parentSignal) parentSignal.removeEventListener('abort', onParentAbort);
+    gatewayStatusCache[gatewayUrl] = { alive: false, time: now };
+    return false;
+  }
+}
+
 /**
  * 遍历代理网关发起请求，支持主备自动无缝容灾（调度过程中静默不报错）
- * 调度策略：优先使用免费 Cloudflare 网关，若超时（6秒无响应）或异常，自动无缝切换至国内阿里云函数网关
+ * 调度策略：
+ * 1. 优先使用免费 Cloudflare 网关，但在发送大模型真实数据前，先发快速 OPTIONS 连通性探测（3秒超时）；
+ * 2. 若连通性探测不通（如内网被阻断/丢包超时），瞬间无缝切换至国内阿里云函数网关；
+ * 3. 探测通过后，进入真实转发流程，该流程完全信任网络连通性，等待大模型生成（不设几秒的粗暴截断限制）。
  */
 async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gateways, originalError) {
   var lastError = originalError || new Error('所有代理网关均不可用');
@@ -3177,63 +3233,46 @@ async function tryProxyGateways(targetEndpoint, headers, bodyStr, signal, gatewa
     var proxyHeaders = Object.assign({}, headers);
     proxyHeaders['x-target-url'] = absoluteTarget;
 
-    // 针对免费海外/CF网关设置首包/连接超时（6秒），超时立即自动无缝切换至国内阿里云
-    var isDomesticGateway = gatewayUrl.indexOf('fcapp.run') !== -1;
-    var timeoutMs = isDomesticGateway ? 120000 : 6000;
-    var gatewayController = new AbortController();
-    var timeoutTriggered = false;
-
-    var onUserAbort = function () {
-      try { gatewayController.abort(); } catch (_) {}
-    };
-    if (signal) {
-      if (signal.aborted) {
+    // 1. 如果当前不是最后一个备选网关，先发轻量 OPTIONS 探测网关物理链路是否畅通
+    if (i < gateways.length - 1) {
+      var isAlive = await probeGatewayAlive(gatewayUrl, 3000, signal);
+      if (signal && signal.aborted) {
         throw new DOMException('Aborted', 'AbortError');
       }
-      signal.addEventListener('abort', onUserAbort, { once: true });
+      if (!isAlive) {
+        console.warn('代理网关 ' + gatewayUrl + ' 连通性探测失败或超时（3秒），正在快速切换下一备用网关...');
+        continue;
+      }
     }
 
-    var timer = setTimeout(function () {
-      timeoutTriggered = true;
-      try { gatewayController.abort(); } catch (_) {}
-    }, timeoutMs);
-
+    // 2. 链路畅通，发起真正的 POST 转发请求（不设粗暴短超时，允许大模型思考与长文本输出）
     try {
       var proxyRes = await fetch(gatewayUrl, {
         method: 'POST',
         headers: proxyHeaders,
         body: bodyStr,
-        signal: gatewayController.signal
+        signal: signal
       });
-
-      // 收到响应头立即清除超时计时器（后续长文本流式输出不受 6 秒限制）
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onUserAbort);
 
       // 若网关发生 502/503/504（或在纯静态托管下同源 /api/proxy 返回 404），静默尝试下一备用网关
       var isGatewayFailure = (proxyRes.status === 502 || proxyRes.status === 503 || proxyRes.status === 504) ||
                              (proxyRes.status === 404 && gatewayUrl === '/api/proxy');
 
       if (!proxyRes.ok && isGatewayFailure && i < gateways.length - 1) {
+        gatewayStatusCache[gatewayUrl] = { alive: false, time: Date.now() };
         console.warn('代理网关 ' + gatewayUrl + ' 返回 ' + proxyRes.status + '，正在无缝切换备用网关...');
         continue;
       }
 
-      // 网关正常响应（包含 200 或上游业务返回的 400/401/403/429 等状态码）
+      // 网关正常响应，标记存活并返回
+      gatewayStatusCache[gatewayUrl] = { alive: true, time: Date.now() };
       return { res: proxyRes, route: gatewayUrl };
     } catch (proxyErr) {
-      clearTimeout(timer);
-      if (signal) signal.removeEventListener('abort', onUserAbort);
-
-      // 如果是用户主动点击停止生成（Cancel），直接抛出，不触发切换
       if (signal && signal.aborted) throw proxyErr;
 
+      gatewayStatusCache[gatewayUrl] = { alive: false, time: Date.now() };
       lastError = proxyErr;
-      if (timeoutTriggered) {
-        console.warn('代理网关 ' + gatewayUrl + ' 响应超时（' + (timeoutMs / 1000) + ' 秒无响应），正在自动无缝切换备用网关...');
-      } else {
-        console.warn('代理网关 ' + gatewayUrl + ' 连接异常，尝试下一个网关...', proxyErr);
-      }
+      console.warn('代理网关 ' + gatewayUrl + ' 转发请求异常，尝试下一个网关...', proxyErr);
     }
   }
 
